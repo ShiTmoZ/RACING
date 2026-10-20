@@ -239,7 +239,8 @@ func _update_drivetrain(delta: float) -> void:
 		is_reversing = false
 
 	var ratio := reverse_ratio if is_reversing else gear_ratios[_gear_index]
-	engine_rpm = clampf(wheel_rpm * ratio * final_drive, idle_rpm, redline_rpm)
+	var effective_throttle := brake_input if is_reversing else throttle_input
+	engine_rpm = clampf(maxf(wheel_rpm * ratio * final_drive, idle_rpm + effective_throttle * 2500.0), idle_rpm, redline_rpm)
 
 	if _shift_timer > 0.0:
 		_shift_timer = maxf(_shift_timer - delta, 0.0)
@@ -256,7 +257,7 @@ func _update_drivetrain(delta: float) -> void:
 			gear_number = _gear_index + 1
 			gear_changed.emit(gear_number)
 
-	var torque := _engine_torque(engine_rpm) * throttle_input
+	var torque := _engine_torque(engine_rpm) * effective_throttle
 	var force := torque * ratio * final_drive * drivetrain_efficiency / wheel_radius
 
 	if is_reversing:
@@ -346,7 +347,9 @@ func _apply_suspension_and_tires(delta: float) -> void:
 		if _is_driven[i] == 1:
 			longitudinal += drive_per_wheel
 
-		var brake_amount := brake_input
+		var brake_amount := 0.0 if is_reversing else brake_input
+		if is_reversing and throttle_input > 0.05:
+			brake_amount = throttle_input
 		if locked:
 			brake_amount = 1.0
 		if brake_amount > 0.0:

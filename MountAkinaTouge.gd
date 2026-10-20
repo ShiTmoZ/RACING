@@ -46,6 +46,8 @@ class RoadFrame:
 
 var _frames: Array[RoadFrame] = []
 var _curve: Curve3D = Curve3D.new()
+var curve: Curve3D:
+	get: return _curve
 var _spawn_transform: Transform3D = Transform3D.IDENTITY
 var _spawned_vehicle: Node3D = null
 
@@ -103,6 +105,11 @@ func _build_entire_environment() -> void:
 	# 8. Populate JDM Landmarks: Neon Kanji Gantries, Torii Gates, Streetlights & Sakura
 	_build_landmarks_and_props()
 	_build_sakura_particle_systems()
+
+	# 9. Populate Procedural Mountain Terrain, Sakura Groves & Layered Silhouette Horizon
+	var forest_env := AkinaMountainForestEnvironment.new()
+	forest_env.name = "AkinaMountainForestEnvironment"
+	add_child(forest_env)
 
 
 # ==============================================================================
@@ -1254,6 +1261,8 @@ func _spawn_player_vehicle() -> void:
 	_spawned_vehicle.add_to_group("player_vehicle")
 	add_child(_spawned_vehicle)
 	_spawned_vehicle.global_transform = _spawn_transform
+	if _spawned_vehicle.has_method("set_spawn_transform"):
+		_spawned_vehicle.call("set_spawn_transform", _spawn_transform)
 	
 	# Attach GPUParticlesAttractorSphere3D to the R34 so falling Sakura petals swirl in its wake
 	var wake_attractor := GPUParticlesAttractorSphere3D.new()
@@ -1495,6 +1504,9 @@ func _input(event: InputEvent) -> void:
 			_toggle_fullscreen()
 		elif key_event.physical_keycode == KEY_ESCAPE:
 			_toggle_pause()
+		elif key_event.physical_keycode == KEY_R:
+			if _spawned_vehicle != null and _spawned_vehicle.has_method("respawn"):
+				_spawned_vehicle.call("respawn")
 
 
 func _toggle_fullscreen() -> void:
