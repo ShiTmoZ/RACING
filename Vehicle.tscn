@@ -1,7 +1,8 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://ArcadeSimVehicle.gd" id="1_vehicle"]
 [ext_resource type="Script" path="res://R34SkylineModeler.gd" id="2_r34"]
+[ext_resource type="Script" path="res://VehicleVFXAndAudio.gd" id="3_vfx"]
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_chassis"]
 size = Vector3(1.785, 0.8, 4.6)
@@ -23,6 +24,9 @@ shape = SubResource("BoxShape3D_chassis")
 
 [node name="R34SkylineModeler" type="Node3D" parent="."]
 script = ExtResource("2_r34")
+
+[node name="VehicleVFXAndAudio" type="Node3D" parent="."]
+script = ExtResource("3_vfx")
 
 [node name="RayFL" type="RayCast3D" parent="."]
 position = Vector3(-0.74, 0.335, -1.3325)

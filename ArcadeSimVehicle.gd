@@ -95,6 +95,20 @@ var _wheel_grounded: PackedByteArray = PackedByteArray()
 var _wheel_contact: Array[Vector3] = []
 var _wheel_normal: Array[Vector3] = []
 
+# Telemetries exposed for audio and VFX subsystem
+var tire_slip_velocities: Array[float] = [0.0, 0.0, 0.0, 0.0]
+var wheel_contact_points: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO]
+var wheel_contact_normals: Array[Vector3] = [Vector3.UP, Vector3.UP, Vector3.UP, Vector3.UP]
+var wheel_is_grounded: Array[bool] = [false, false, false, false]
+
+var current_gear: int:
+	get:
+		return -1 if is_reversing else gear_number
+
+var gear_ratio: float:
+	get:
+		return reverse_ratio if is_reversing else (gear_ratios[mini(_gear_index, gear_ratios.size() - 1)] if not gear_ratios.is_empty() else 3.2)
+
 # ----------------------------------------------------------------------------- lifecycle
 func _ready() -> void:
 	can_sleep = false
@@ -304,6 +318,9 @@ func _apply_suspension_and_tires(delta: float) -> void:
 
 	for i in count:
 		if _wheel_grounded[i] == 0:
+			if i < tire_slip_velocities.size():
+				wheel_is_grounded[i] = false
+				tire_slip_velocities[i] = 0.0
 			continue
 
 		var point := _wheel_contact[i]
@@ -342,6 +359,17 @@ func _apply_suspension_and_tires(delta: float) -> void:
 		var longitudinal_cap := tire_grip * 1.35 * load
 		longitudinal = clampf(longitudinal, -longitudinal_cap, longitudinal_cap)
 		apply_force(wheel_forward * longitudinal, point - global_position)
+
+		if i < tire_slip_velocities.size():
+			wheel_is_grounded[i] = true
+			wheel_contact_points[i] = point
+			wheel_contact_normals[i] = _wheel_normal[i]
+			var slip := absf(lateral_speed)
+			if locked:
+				slip += absf(longitudinal_speed) * 0.85
+			elif _is_driven[i] == 1 and throttle_input > 0.8 and speed_kmh < 30.0:
+				slip += (engine_rpm / redline_rpm) * 12.0
+			tire_slip_velocities[i] = slip
 
 func _apply_anti_roll(body_up: Vector3, count: int) -> void:
 	var pairs := [[0, 1], [2, 3]]
