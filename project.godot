@@ -10,8 +10,8 @@ config_version=5
 
 [application]
 
-config/name="ArcadeSim - Nightfall Circuit"
-run/main_scene="res://TrackArena.tscn"
+config/name="RACING - Mount Akina Touge (JDM)"
+run/main_scene="res://MountAkinaTouge.tscn"
 config/features=PackedStringArray("4.3", "Forward Plus")
 
 [display]
