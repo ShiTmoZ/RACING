@@ -567,43 +567,32 @@ func _build_road_and_retaining_mesh() -> void:
 			ring[p] = f.position + f.binormal * road_profile_x[p] + f.normal * road_profile_y[p]
 		road_rings.append(ring)
 		
-		# Determine which side is mountain wall vs drop-off ravine based on position from center
+		# Determine which side is mountain wall vs drop-off ravine with smooth continuous blending
 		var radial_dir: Vector3 = Vector3(f.position.x, 0.0, f.position.z).normalized()
 		var left_dot: float = (-f.binormal).dot(radial_dir)
-		
-		# Left side terrain / retaining wall
+		# Continuous blend factor to eliminate abrupt 87m vertical tears/spikes across quad seams
+		var mountain_on_left: float = clampf(( -left_dot + 0.35 ) / 0.7, 0.0, 1.0)
+		var mountain_on_right: float = 1.0 - mountain_on_left
+
+		# Left side continuous terrain profile
 		var l_base: Vector3 = ring[0]
-		var l_ring := PackedVector3Array()
-		if left_dot < 0.0:
-			# Inner mountain side: tall concrete retaining wall + upper jagged rock face
-			var wall_top: Vector3 = l_base - f.binormal * 0.8 + Vector3.UP * 5.5
-			var rock_mid: Vector3 = wall_top - f.binormal * 6.0 + Vector3.UP * 14.0
-			var rock_peak: Vector3 = rock_mid - f.binormal * 12.0 + Vector3.UP * 22.0
-			l_ring = PackedVector3Array([l_base, wall_top, rock_mid, rock_peak])
-		else:
-			# Outer cliff drop-off side
-			var skirt_1: Vector3 = l_base - f.binormal * 1.2 + Vector3.DOWN * 1.5
-			var skirt_2: Vector3 = skirt_1 - f.binormal * 10.0 + Vector3.DOWN * 24.0
-			var skirt_3: Vector3 = skirt_2 - f.binormal * 24.0 + Vector3.DOWN * 65.0
-			l_ring = PackedVector3Array([l_base, skirt_1, skirt_2, skirt_3])
-		left_cliff_rings.append(l_ring)
-		
-		# Right side terrain / retaining wall
+		var l_wall_h: float = lerpf(-1.2, 5.0, mountain_on_left)
+		var l_rock_h: float = lerpf(-14.0, 15.0, mountain_on_left)
+		var l_peak_h: float = lerpf(-38.0, 26.0, mountain_on_left)
+		var l_wall_top: Vector3 = l_base - f.binormal * 1.0 + Vector3.UP * l_wall_h
+		var l_rock_mid: Vector3 = l_wall_top - f.binormal * 7.0 + Vector3.UP * (l_rock_h - l_wall_h)
+		var l_rock_peak: Vector3 = l_rock_mid - f.binormal * 16.0 + Vector3.UP * (l_peak_h - l_rock_h)
+		left_cliff_rings.append(PackedVector3Array([l_base, l_wall_top, l_rock_mid, l_rock_peak]))
+
+		# Right side continuous terrain profile
 		var r_base: Vector3 = ring[p_count - 1]
-		var r_ring := PackedVector3Array()
-		if left_dot >= 0.0:
-			# Inner mountain side on right
-			var wall_top: Vector3 = r_base + f.binormal * 0.8 + Vector3.UP * 5.5
-			var rock_mid: Vector3 = wall_top + f.binormal * 6.0 + Vector3.UP * 14.0
-			var rock_peak: Vector3 = rock_mid + f.binormal * 12.0 + Vector3.UP * 22.0
-			r_ring = PackedVector3Array([r_base, wall_top, rock_mid, rock_peak])
-		else:
-			# Outer cliff drop-off on right
-			var skirt_1: Vector3 = r_base + f.binormal * 1.2 + Vector3.DOWN * 1.5
-			var skirt_2: Vector3 = skirt_1 + f.binormal * 10.0 + Vector3.DOWN * 24.0
-			var skirt_3: Vector3 = skirt_2 + f.binormal * 24.0 + Vector3.DOWN * 65.0
-			r_ring = PackedVector3Array([r_base, skirt_1, skirt_2, skirt_3])
-		right_cliff_rings.append(r_ring)
+		var r_wall_h: float = lerpf(-1.2, 5.0, mountain_on_right)
+		var r_rock_h: float = lerpf(-14.0, 15.0, mountain_on_right)
+		var r_peak_h: float = lerpf(-38.0, 26.0, mountain_on_right)
+		var r_wall_top: Vector3 = r_base + f.binormal * 1.0 + Vector3.UP * r_wall_h
+		var r_rock_mid: Vector3 = r_wall_top + f.binormal * 7.0 + Vector3.UP * (r_rock_h - r_wall_h)
+		var r_rock_peak: Vector3 = r_rock_mid + f.binormal * 16.0 + Vector3.UP * (r_peak_h - r_rock_h)
+		right_cliff_rings.append(PackedVector3Array([r_base, r_wall_top, r_rock_mid, r_rock_peak]))
 	
 	# Stitch Road & Gutter Quads
 	for i in range(n_frames):

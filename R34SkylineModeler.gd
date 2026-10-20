@@ -166,6 +166,7 @@ func _init_materials() -> void:
 	_mat_body.clearcoat_enabled = true
 	_mat_body.clearcoat = 1.0
 	_mat_body.clearcoat_roughness = 0.05
+	_mat_body.cull_mode = BaseMaterial3D.CULL_DISABLED
 
 	# Matte Black Trim (Splitter, Diffuser, Pillars, Wiper Cowl)
 	_mat_carbon_matte = StandardMaterial3D.new()
@@ -173,6 +174,7 @@ func _init_materials() -> void:
 	_mat_carbon_matte.albedo_color = Color(0.06, 0.06, 0.07, 1.0)
 	_mat_carbon_matte.metallic = 0.15
 	_mat_carbon_matte.roughness = 0.78
+	_mat_carbon_matte.cull_mode = BaseMaterial3D.CULL_DISABLED
 
 	# Tinted Tempered Glass
 	_mat_glass = StandardMaterial3D.new()
