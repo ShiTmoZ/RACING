@@ -598,7 +598,10 @@ func _setup_skidmark_ribbons() -> void:
 	# Top-level container ensures baked world-space skidmarks stay anchored on the road
 	_skid_container = Node.new()
 	_skid_container.name = "SkidmarkWorldContainer_" + str(get_instance_id())
-	get_tree().current_scene.call_deferred("add_child", _skid_container)
+	if get_tree() != null and get_tree().current_scene != null:
+		get_tree().current_scene.call_deferred("add_child", _skid_container)
+	else:
+		call_deferred("add_sibling", _skid_container)
 
 	_skid_material = StandardMaterial3D.new()
 	_skid_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
