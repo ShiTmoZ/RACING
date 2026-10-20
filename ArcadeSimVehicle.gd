@@ -1,466 +1,471 @@
 class_name ArcadeSimVehicle
 extends RigidBody3D
+## Arcade-sim vehicle controller.
+##
+## Raycast suspension + per-wheel friction-circle tire model + torque-curve driven
+## automatic gearbox.  The body is a plain RigidBody3D; all cornering, grip and
+## suspension behaviour is produced by forces applied at the four wheel contacts,
+## which keeps the car stable at 120 Hz physics without any raycast "glue".
+##
+## Local axes: -Z = forward, +X = right, +Y = up.
 
-## ============================================================================
-## ShiTmoZ/RACING - Mount Akina Touge
-## ArcadeSimVehicle.gd - Forza 6 Simcade Physics & Drivetrain Core (Godot 4.3)
-## ============================================================================
+signal gear_changed(new_gear: int)
 
-# --- Public Telemetry Properties ---
-@export var speed_kmh: float = 0.0
-@export var engine_rpm: float = 800.0
-@export var gear_number: int = 1 # 0 = Reverse, 1 = Neutral, 2+ = Gears 1-6
-@export var is_reversing: bool = false
-@export var steer_angle: float = 0.0
+@export_group("Wheel Nodes")
+## RayCast3D nodes whose origin is the suspension mount and whose ray points
+## straight down along -Y.  Expected order: FL, FR, RL, RR.
+@export var wheel_rays: Array[RayCast3D] = []
+## Visual wheel nodes, same order as [member wheel_rays].
+@export var wheel_meshes: Array[Node3D] = []
+## Index into [member wheel_rays] for the two steered wheels.
+@export var front_wheel_indices: Array[int] = [0, 1]
+## Index into [member wheel_rays] for the driven wheels (RWD by default).
+@export var driven_wheel_indices: Array[int] = [2, 3]
+@export var wheel_radius: float = 0.36
+## Total ray length from mount to the fully extended wheel contact.
+@export var ray_length: float = 0.72
 
-# Telemetry & Audio/VFX bindings
-var throttle_input: float:
-	get: return _throttle_input
-	set(v): _throttle_input = v
-var brake_input: float:
-	get: return _brake_input
-	set(v): _brake_input = v
+@export_group("Suspension")
+@export var suspension_stiffness: float = 45000.0
+@export var suspension_damping: float = 4300.0
+@export var suspension_max_force: float = 45000.0
+@export var anti_roll_stiffness: float = 11000.0
+
+@export_group("Drivetrain")
+@export var engine_peak_torque: float = 430.0
+@export var idle_rpm: float = 950.0
+@export var redline_rpm: float = 7400.0
+@export var gear_ratios: Array[float] = [3.55, 2.35, 1.72, 1.30, 1.04, 0.82]
+@export var final_drive: float = 3.42
+@export var reverse_ratio: float = 3.10
+@export var drivetrain_efficiency: float = 0.92
+@export var upshift_rpm: float = 6900.0
+@export var downshift_rpm: float = 2500.0
+@export var shift_duration: float = 0.20
+@export var reverse_torque_scale: float = 0.90
+@export var max_reverse_speed: float = 18.0
+
+@export_group("Tires")
+## Peak friction coefficient of the tire model (1.0 = 1 g).
+@export var tire_grip: float = 1.55
+@export var rear_grip_multiplier: float = 1.0
+@export var handbrake_grip_multiplier: float = 0.28
+@export var rolling_resistance: float = 180.0
+
+@export_group("Aero")
+## 0.5 * air_density * Cd * frontal_area.  F = coefficient * v^2.
+@export var drag_coefficient: float = 0.43
+## 0.5 * air_density * Cl * frontal_area.  F = coefficient * v^2.
+@export var downforce_coefficient: float = 0.95
+
+@export_group("Steering")
+@export var max_steer_angle: float = 0.62
+@export var min_steer_angle: float = 0.15
+@export var steer_speed_reference: float = 55.0
+@export var steer_rate: float = 7.5
+@export var steer_centering_rate: float = 11.0
+
+# ----------------------------------------------------------------------------- state
+var steer_angle: float = 0.0
+var throttle_input: float = 0.0
+var brake_input: float = 0.0
 var handbrake_input: float = 0.0
 
+var speed_kmh: float = 0.0
+var forward_speed: float = 0.0
+var engine_rpm: float = 0.0
+var gear_number: int = 1
+var is_reversing: bool = false
+
+var _gear_index: int = 0
+var _shift_timer: float = 0.0
+var _engine_force: float = 0.0
+var _spawn_transform: Transform3D = Transform3D.IDENTITY
+var _flip_timer: float = 0.0
+
+var _is_front: PackedByteArray = PackedByteArray()
+var _is_driven: PackedByteArray = PackedByteArray()
+
+var _wheel_spin: PackedFloat32Array = PackedFloat32Array()
+var _wheel_steer: PackedFloat32Array = PackedFloat32Array()
+var _wheel_compression: PackedFloat32Array = PackedFloat32Array()
+var _wheel_distance: PackedFloat32Array = PackedFloat32Array()
+var _wheel_force: PackedFloat32Array = PackedFloat32Array()
+var _wheel_grounded: PackedByteArray = PackedByteArray()
+var _wheel_contact: Array[Vector3] = []
+var _wheel_normal: Array[Vector3] = []
+
+# Telemetries exposed for audio and VFX subsystem
+var tire_slip_velocities: Array[float] = [0.0, 0.0, 0.0, 0.0]
+var wheel_contact_points: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO]
+var wheel_contact_normals: Array[Vector3] = [Vector3.UP, Vector3.UP, Vector3.UP, Vector3.UP]
+var wheel_is_grounded: Array[bool] = [false, false, false, false]
+
 var current_gear: int:
-	get: return gear_number
+	get:
+		return -1 if is_reversing else gear_number
 
 var gear_ratio: float:
 	get:
-		if specs != null and _current_gear_idx < specs.gear_ratios.size():
-			return specs.gear_ratios[_current_gear_idx]
-		return 1.0
+		return reverse_ratio if is_reversing else (gear_ratios[mini(_gear_index, gear_ratios.size() - 1)] if not gear_ratios.is_empty() else 3.2)
 
-var tire_slip_velocities: PackedFloat32Array = PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
-var _wheel_grounded: PackedInt32Array = PackedInt32Array([1, 1, 1, 1])
-var _wheel_contact: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO]
-
-# --- Vehicle Specification Profiles ---
-enum CarType { AE86, R34 }
-@export var active_car: CarType = CarType.AE86
-
-class VehicleSpecs:
-	var name: String
-	var mass: float
-	var weight_bias_front: float # e.g. 0.53 = 53% front
-	var wheelbase: float
-	var track_width: float
-	var cg_height: float
-	
-	# Engine
-	var max_hp: float
-	var peak_hp_rpm: float
-	var max_torque_nm: float
-	var peak_torque_rpm: float
-	var redline_rpm: float
-	var idle_rpm: float
-	
-	# Transmission & Drivetrain
-	var drive_type: String # "FR" or "AWD"
-	var gear_ratios: PackedFloat32Array
-	var final_drive: float
-	
-	# Suspension & Tires
-	var spring_stiffness: float
-	var damping_ratio: float
-	var max_suspension_travel: float
-	var tire_grip_mult: float
-	var weight_transfer_gain: float
-
-var specs: VehicleSpecs
-
-# --- Vehicle Profiles Data Dictionary ---
-var specs_ae86 := VehicleSpecs.new()
-var specs_r34 := VehicleSpecs.new()
-
-# --- Internal Physics & Control State ---
-var _throttle_input: float = 0.0
-var _brake_input: float = 0.0
-var _raw_steer_input: float = 0.0
-var _clutch_delay_timer: float = 0.0
-var _current_gear_idx: int = 2 # Default 1st gear (0=R, 1=N, 2=1st)
-var _spawn_transform: Transform3D = Transform3D.IDENTITY
-var _is_shifting: bool = false
-var _flip_timer: float = 0.0
-
-# Suspension Raycast States & Wheel Transforms (FL, FR, RL, RR)
-var _wheel_nodes: Array[Node3D] = []
-var _suspension_lengths: PackedFloat32Array = PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
-var _wheel_speeds: PackedFloat32Array = PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
-var _wheel_slips: PackedFloat32Array = PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
-var _wheel_spin: PackedFloat32Array = PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
-
-# Visual Mesh Nodes
-@export var mesh_ae86_path: NodePath
-@export var mesh_r34_path: NodePath
-var _mesh_ae86: Node3D
-var _mesh_r34: Node3D
-
-# Audio / Particle Triggers
-var tire_scrub_intensity: float = 0.0
-
-
-## ============================================================================
-## INITIALIZATION & PROFILE SETUP
-## ============================================================================
-
+# ----------------------------------------------------------------------------- lifecycle
 func _ready() -> void:
-	contact_monitor = true
-	max_contacts_reported = 8
-	_init_vehicle_specs()
-	_setup_wheel_nodes()
-	_setup_mesh_nodes()
-	apply_vehicle_profile("ae86" if active_car == CarType.AE86 else "r34")
+	can_sleep = false
+	contact_monitor = false
 	_spawn_transform = global_transform
+	_resolve_wheel_nodes()
+	_build_wheel_flags()
+	_allocate_wheel_state()
+	gear_number = _gear_index + 1
 
+func _physics_process(delta: float) -> void:
+	if delta <= 0.0 or wheel_rays.is_empty():
+		return
 
-func _init_vehicle_specs() -> void:
-	# Profile A: Toyota Sprinter Trueno (AE86 GT-APEX)
-	specs_ae86.name = "Toyota Sprinter Trueno AE86"
-	specs_ae86.mass = 960.0
-	specs_ae86.weight_bias_front = 0.53
-	specs_ae86.wheelbase = 2.40
-	specs_ae86.track_width = 1.35
-	specs_ae86.cg_height = 0.46
-	specs_ae86.max_hp = 175.0
-	specs_ae86.peak_hp_rpm = 7800.0
-	specs_ae86.max_torque_nm = 192.0
-	specs_ae86.peak_torque_rpm = 5600.0
-	specs_ae86.redline_rpm = 8200.0
-	specs_ae86.idle_rpm = 950.0
-	specs_ae86.drive_type = "FR"
-	specs_ae86.gear_ratios = PackedFloat32Array([-3.25, 0.0, 3.58, 2.15, 1.51, 1.19, 1.00, 0.85]) # R, N, 1-6
-	specs_ae86.final_drive = 4.30
-	specs_ae86.spring_stiffness = 38000.0
-	specs_ae86.damping_ratio = 0.65
-	specs_ae86.max_suspension_travel = 0.22
-	specs_ae86.tire_grip_mult = 1.15
-	specs_ae86.weight_transfer_gain = 1.25
+	_read_input()
+	_update_motion_state()
+	_update_steering(delta)
+	_update_drivetrain(delta)
+	_apply_suspension_and_tires(delta)
+	_apply_aero()
+	_update_wheel_visuals(delta)
+	_check_recovery(delta)
+	if r34_model != null:
+		r34_model.is_braking = (brake_input > 0.05) or (handbrake_input > 0.1)
+		r34_model.is_reversing = is_reversing
+		r34_model.headlights_on = true
 
-	# Profile B: Nissan Skyline GT-R (BNR34 V-Spec II)
-	specs_r34.name = "Nissan Skyline GT-R BNR34"
-	specs_r34.mass = 1560.0
-	specs_r34.weight_bias_front = 0.57
-	specs_r34.wheelbase = 2.66
-	specs_r34.track_width = 1.48
-	specs_r34.cg_height = 0.49
-	specs_r34.max_hp = 330.0
-	specs_r34.peak_hp_rpm = 6800.0
-	specs_r34.max_torque_nm = 425.0
-	specs_r34.peak_torque_rpm = 4400.0
-	specs_r34.redline_rpm = 8000.0
-	specs_r34.idle_rpm = 850.0
-	specs_r34.drive_type = "AWD"
-	specs_r34.gear_ratios = PackedFloat32Array([-3.01, 0.0, 3.82, 2.20, 1.48, 1.16, 0.97, 0.82]) # R, N, 1-6
-	specs_r34.final_drive = 3.541
-	specs_r34.spring_stiffness = 52000.0
-	specs_r34.damping_ratio = 0.68
-	specs_r34.max_suspension_travel = 0.20
-	specs_r34.tire_grip_mult = 1.25
-	specs_r34.weight_transfer_gain = 1.10
+# ----------------------------------------------------------------------------- setup
+var r34_model: Node3D = null
 
+func _resolve_wheel_nodes() -> void:
+	# The scene wires these through exported node references, but the controller
+	# stays usable when it is instanced from code with nothing wired at all.
+	var rays_valid := not wheel_rays.is_empty()
+	for ray in wheel_rays:
+		if ray == null:
+			rays_valid = false
+	if not rays_valid:
+		wheel_rays.clear()
+		for child in get_children():
+			if child is RayCast3D:
+				wheel_rays.append(child as RayCast3D)
 
-func _setup_wheel_nodes() -> void:
-	_wheel_nodes.clear()
-	var ray_names := ["RayFL", "RayFR", "RayRL", "RayRR"]
-	var wheel_names := ["WheelFL", "WheelFR", "WheelRL", "WheelRR"]
-	for i in range(4):
-		var node: Node3D = find_child(wheel_names[i], true, false) as Node3D
-		if node == null:
-			node = get_node_or_null(ray_names[i]) as Node3D
-		if node == null:
-			var marker := Marker3D.new()
-			marker.name = wheel_names[i]
-			match i:
-				0: marker.position = Vector3(-0.72, -0.2, -1.20)
-				1: marker.position = Vector3(0.72, -0.2, -1.20)
-				2: marker.position = Vector3(-0.72, -0.2, 1.20)
-				3: marker.position = Vector3(0.72, -0.2, 1.20)
-			add_child(marker)
-			node = marker
-		_wheel_nodes.append(node)
-
-
-func _setup_mesh_nodes() -> void:
-	if not mesh_ae86_path.is_empty():
-		_mesh_ae86 = get_node_or_null(mesh_ae86_path) as Node3D
-	if not mesh_r34_path.is_empty():
-		_mesh_r34 = get_node_or_null(mesh_r34_path) as Node3D
-
-
-## ============================================================================
-## PUBLIC VEHICLE SWITCHER & TELEMETRY API
-## ============================================================================
-
-func apply_vehicle_profile(car_type_str: String) -> void:
-	if car_type_str.to_lower().contains("ae86") or car_type_str == "0":
-		active_car = CarType.AE86
-		specs = specs_ae86
-		if _mesh_ae86: _mesh_ae86.visible = true
-		if _mesh_r34: _mesh_r34.visible = false
+	r34_model = get_node_or_null("R34SkylineModeler")
+	if r34_model != null and "WheelFL" in r34_model and r34_model.WheelFL != null:
+		wheel_meshes = [r34_model.WheelFL, r34_model.WheelFR, r34_model.WheelRL, r34_model.WheelRR]
 	else:
-		active_car = CarType.R34
-		specs = specs_r34
-		if _mesh_ae86: _mesh_ae86.visible = false
-		if _mesh_r34: _mesh_r34.visible = true
-	
-	mass = specs.mass
-	engine_rpm = specs.idle_rpm
-	_current_gear_idx = 2 # 1st gear
-	linear_velocity = Vector3.ZERO
-	angular_velocity = Vector3.ZERO
+		var meshes_valid := not wheel_meshes.is_empty()
+		for mesh in wheel_meshes:
+			if mesh == null:
+				meshes_valid = false
+		if not meshes_valid:
+			wheel_meshes.clear()
+			for child in get_children():
+				if child is Node3D and String(child.name).begins_with("Wheel"):
+					wheel_meshes.append(child as Node3D)
 
+func _build_wheel_flags() -> void:
+	var count := wheel_rays.size()
+	_is_front.resize(count)
+	_is_driven.resize(count)
+	for i in count:
+		_is_front[i] = 1 if front_wheel_indices.has(i) else 0
+		_is_driven[i] = 1 if driven_wheel_indices.has(i) else 0
 
-func respawn() -> void:
-	global_transform = _spawn_transform
-	linear_velocity = Vector3.ZERO
-	angular_velocity = Vector3.ZERO
-	_current_gear_idx = 2
-	engine_rpm = specs.idle_rpm
-	sleeping = false
-	_flip_timer = 0.0
+func _allocate_wheel_state() -> void:
+	var count := wheel_rays.size()
+	_wheel_spin.resize(count)
+	_wheel_steer.resize(count)
+	_wheel_compression.resize(count)
+	_wheel_distance.resize(count)
+	_wheel_force.resize(count)
+	_wheel_grounded.resize(count)
+	_wheel_contact.resize(count)
+	_wheel_normal.resize(count)
+	for i in count:
+		_wheel_distance[i] = ray_length
+		if wheel_rays[i] != null:
+			wheel_rays[i].exclude_parent = true
+			wheel_rays[i].collision_mask = 1
+			wheel_rays[i].target_position = Vector3(0.0, -ray_length, 0.0)
+			wheel_rays[i].force_raycast_update()
 
-
-func set_spawn_transform(t: Transform3D) -> void:
-	_spawn_transform = t
-
-
-## ============================================================================
-## INPUT GATHERING & PHYSICS INTEGRATION
-## ============================================================================
-
-func _process(delta: float) -> void:
-	# Gather Arcade/Sim Player Controls
-	_throttle_input = Input.get_action_strength("accelerate")
-	_brake_input = Input.get_action_strength("brake")
+# ----------------------------------------------------------------------------- input
+func _read_input() -> void:
+	throttle_input = Input.get_action_strength("accelerate")
+	brake_input = Input.get_action_strength("brake")
 	handbrake_input = Input.get_action_strength("handbrake")
-	
-	var steer_left := Input.get_action_strength("steer_left")
-	var steer_right := Input.get_action_strength("steer_right")
-	_raw_steer_input = steer_left - steer_right # Positive steer turns car
-	
 	if Input.is_action_just_pressed("reset_vehicle"):
 		respawn()
-	
-	# Automatic / Sequential Shifting
-	if InputMap.has_action("gear_up") and Input.is_action_just_pressed("gear_up") and not _is_shifting:
-		_shift_gear(1)
-	elif InputMap.has_action("gear_down") and Input.is_action_just_pressed("gear_down") and not _is_shifting:
-		_shift_gear(-1)
-	elif not _is_shifting and _current_gear_idx >= 2:
-		# Auto-shift up when hitting redline
-		if engine_rpm > specs.redline_rpm - 450.0 and _current_gear_idx < specs.gear_ratios.size() - 1:
-			_shift_gear(1)
-		# Auto-shift down when speed / RPM drops
-		elif engine_rpm < 2400.0 and _current_gear_idx > 2 and speed_kmh < (float(_current_gear_idx) * 22.0):
-			_shift_gear(-1)
-	
-	if _clutch_delay_timer > 0.0:
-		_clutch_delay_timer -= delta
-	
-	# Anti-flip recovery
-	if global_position.y < -35.0:
+
+# ----------------------------------------------------------------------------- motion
+func flat_forward() -> Vector3:
+	var f := -global_transform.basis.z
+	f.y = 0.0
+	if f.length_squared() < 0.0001:
+		return Vector3.FORWARD
+	return f.normalized()
+
+func _update_motion_state() -> void:
+	forward_speed = linear_velocity.dot(flat_forward())
+	speed_kmh = absf(forward_speed) * 3.6
+
+func _update_steering(delta: float) -> void:
+	var axis := Input.get_action_strength("steer_left") - Input.get_action_strength("steer_right")
+	var speed_ratio := clampf(absf(forward_speed) / steer_speed_reference, 0.0, 1.0)
+	var limit := lerpf(max_steer_angle, min_steer_angle, speed_ratio)
+	var goal := axis * limit
+	var rate := steer_rate if absf(goal) > absf(steer_angle) else steer_centering_rate
+	steer_angle = move_toward(steer_angle, goal, rate * delta)
+	for i in _wheel_steer.size():
+		_wheel_steer[i] = steer_angle if _is_front[i] == 1 else 0.0
+
+# ----------------------------------------------------------------------------- drivetrain
+func _engine_torque(rpm: float) -> float:
+	# Broad, naturally aspirated style curve: strong from idle, peak around 70%
+	# of redline, gentle fall-off afterwards.
+	var x := clampf(rpm / redline_rpm, 0.0, 1.0)
+	var curve := 0.62 + 0.86 * x - 0.60 * x * x
+	return engine_peak_torque * curve
+
+func _update_drivetrain(delta: float) -> void:
+	var wheel_rpm := absf(forward_speed) / wheel_radius * (60.0 / TAU)
+
+	if forward_speed < 0.8 and brake_input > 0.2 and throttle_input < 0.1:
+		is_reversing = true
+	if throttle_input > 0.2 and forward_speed < 4.0:
+		is_reversing = false
+
+	var ratio := reverse_ratio if is_reversing else gear_ratios[_gear_index]
+	engine_rpm = clampf(wheel_rpm * ratio * final_drive, idle_rpm, redline_rpm)
+
+	if _shift_timer > 0.0:
+		_shift_timer = maxf(_shift_timer - delta, 0.0)
+
+	if not is_reversing and _shift_timer <= 0.0 and absf(forward_speed) > 2.0:
+		if engine_rpm > upshift_rpm and _gear_index < gear_ratios.size() - 1:
+			_gear_index += 1
+			_shift_timer = shift_duration
+			gear_number = _gear_index + 1
+			gear_changed.emit(gear_number)
+		elif engine_rpm < downshift_rpm and _gear_index > 0:
+			_gear_index -= 1
+			_shift_timer = shift_duration * 0.7
+			gear_number = _gear_index + 1
+			gear_changed.emit(gear_number)
+
+	var drive_input := brake_input if is_reversing else throttle_input
+	var torque := _engine_torque(engine_rpm) * drive_input
+	var force := torque * ratio * final_drive * drivetrain_efficiency / wheel_radius
+
+	if is_reversing:
+		force = -force * reverse_torque_scale
+		if forward_speed < -max_reverse_speed:
+			force = 0.0
+	if _shift_timer > 0.0:
+		force = 0.0
+	_engine_force = force
+
+# ----------------------------------------------------------------------------- tires
+func _point_velocity(point: Vector3) -> Vector3:
+	return linear_velocity + angular_velocity.cross(point - global_position)
+
+func _apply_suspension_and_tires(delta: float) -> void:
+	var count := wheel_rays.size()
+	var forward := flat_forward()
+	var body_up := global_transform.basis.y.normalized()
+	var corner_mass := mass / float(count)
+	var inv_delta := 1.0 / delta
+
+	var driven_total := 0
+	for i in count:
+		if _is_driven[i] == 1:
+			driven_total += 1
+	var drive_per_wheel := _engine_force / float(driven_total) if driven_total > 0 else 0.0
+
+	for i in count:
+		_wheel_grounded[i] = 0
+		_wheel_force[i] = 0.0
+		_wheel_compression[i] = 0.0
+		_wheel_distance[i] = ray_length
+		var ray := wheel_rays[i]
+		if ray == null or not ray.is_colliding():
+			continue
+
+		var point := ray.get_collision_point()
+		var normal := ray.get_collision_normal()
+		var distance := ray.global_position.distance_to(point)
+		_wheel_distance[i] = distance
+		if distance > ray_length:
+			continue
+
+		var compression := clampf(ray_length - distance, 0.0, ray_length - wheel_radius)
+		var velocity := _point_velocity(point)
+		var down := -ray.global_transform.basis.y.normalized()
+		var compression_speed := velocity.dot(down)
+		var spring := compression * suspension_stiffness + compression_speed * suspension_damping
+		spring = clampf(spring, 0.0, suspension_max_force)
+
+		_wheel_compression[i] = compression
+		_wheel_force[i] = spring
+		_wheel_grounded[i] = 1
+		_wheel_contact[i] = point
+		_wheel_normal[i] = normal
+		apply_force(body_up * spring, point - global_position)
+
+	_apply_anti_roll(body_up, count)
+
+	for i in count:
+		if _wheel_grounded[i] == 0:
+			if i < tire_slip_velocities.size():
+				wheel_is_grounded[i] = false
+				tire_slip_velocities[i] = 0.0
+			continue
+
+		var point := _wheel_contact[i]
+		var velocity := _point_velocity(point)
+		var steer := _wheel_steer[i]
+		var wheel_forward := forward.rotated(Vector3.UP, steer).normalized()
+		var wheel_right := wheel_forward.cross(Vector3.UP).normalized()
+
+		var grip := tire_grip
+		var locked := handbrake_input > 0.1 and _is_front[i] == 0
+		if _is_front[i] == 0:
+			grip *= rear_grip_multiplier
+			if locked:
+				grip *= handbrake_grip_multiplier
+
+		var load := maxf(_wheel_force[i], 0.0)
+		var lateral_speed := velocity.dot(wheel_right)
+		var lateral_force := clampf(-lateral_speed * corner_mass * inv_delta * 0.95, -grip * load, grip * load)
+		apply_force(wheel_right * lateral_force, point - global_position)
+
+		var longitudinal_speed := velocity.dot(wheel_forward)
+		var longitudinal := 0.0
+		if _is_driven[i] == 1:
+			longitudinal += drive_per_wheel
+
+		var brake_amount := brake_input
+		if locked:
+			brake_amount = 1.0
+		if brake_amount > 0.0:
+			var brake_cap := tire_grip * load * brake_amount
+			longitudinal += clampf(-longitudinal_speed * corner_mass * inv_delta, -brake_cap, brake_cap)
+
+		if absf(longitudinal_speed) > 0.05:
+			longitudinal -= signf(longitudinal_speed) * minf(rolling_resistance, absf(longitudinal_speed) * corner_mass * inv_delta)
+
+		var longitudinal_cap := tire_grip * 1.35 * load
+		longitudinal = clampf(longitudinal, -longitudinal_cap, longitudinal_cap)
+		apply_force(wheel_forward * longitudinal, point - global_position)
+
+		if i < tire_slip_velocities.size():
+			wheel_is_grounded[i] = true
+			wheel_contact_points[i] = point
+			wheel_contact_normals[i] = _wheel_normal[i]
+			var slip := absf(lateral_speed)
+			if locked:
+				slip += absf(longitudinal_speed) * 0.85
+			elif _is_driven[i] == 1 and throttle_input > 0.8 and speed_kmh < 30.0:
+				slip += (engine_rpm / redline_rpm) * 12.0
+			tire_slip_velocities[i] = slip
+
+func _apply_anti_roll(body_up: Vector3, count: int) -> void:
+	var pairs := [[0, 1], [2, 3]]
+	for pair in pairs:
+		var left: int = pair[0]
+		var right: int = pair[1]
+		if left >= count or right >= count:
+			continue
+		if _wheel_grounded[left] == 0 and _wheel_grounded[right] == 0:
+			continue
+		var difference := _wheel_compression[left] - _wheel_compression[right]
+		var force := clampf(difference * anti_roll_stiffness, -suspension_max_force, suspension_max_force)
+		if _wheel_grounded[left] == 1:
+			apply_force(body_up * force, _wheel_contact[left] - global_position)
+			_wheel_force[left] = maxf(_wheel_force[left] + force, 0.0)
+		if _wheel_grounded[right] == 1:
+			apply_force(body_up * -force, _wheel_contact[right] - global_position)
+			_wheel_force[right] = maxf(_wheel_force[right] - force, 0.0)
+
+func _apply_aero() -> void:
+	var velocity := linear_velocity
+	var speed := velocity.length()
+	if speed < 0.5:
+		return
+	var up := global_transform.basis.y.normalized()
+	apply_central_force(-velocity / speed * drag_coefficient * speed * speed)
+	apply_central_force(-up * downforce_coefficient * speed * speed)
+
+# ----------------------------------------------------------------------------- visuals
+func _update_wheel_visuals(delta: float) -> void:
+	var count := mini(wheel_meshes.size(), _wheel_distance.size())
+	for i in count:
+		var mesh := wheel_meshes[i]
+		var ray := wheel_rays[i]
+		if mesh == null or ray == null:
+			continue
+
+		var wheel_y := -(ray_length - wheel_radius)
+		if _wheel_grounded[i] == 1:
+			wheel_y = -(_wheel_distance[i] - wheel_radius)
+			var wheel_forward := (-ray.global_transform.basis.z).rotated(Vector3.UP, _wheel_steer[i]).normalized()
+			var long_speed := _point_velocity(_wheel_contact[i]).dot(wheel_forward)
+			if not (handbrake_input > 0.1 and _is_front[i] == 0):
+				_wheel_spin[i] -= long_speed / wheel_radius * delta
+		else:
+			_wheel_spin[i] -= forward_speed / wheel_radius * delta
+
+		if _wheel_spin[i] > TAU or _wheel_spin[i] < -TAU:
+			_wheel_spin[i] = fposmod(_wheel_spin[i], TAU)
+
+		var steer_basis := Basis(Vector3.UP, _wheel_steer[i])
+		var spin_basis := Basis(Vector3.RIGHT, _wheel_spin[i])
+		var wheel_basis: Basis
+		if r34_model != null:
+			wheel_basis = steer_basis * spin_basis
+		else:
+			var tip_basis := Basis(Vector3.BACK, PI * 0.5)
+			wheel_basis = steer_basis * spin_basis * tip_basis
+		mesh.transform = Transform3D(wheel_basis, Vector3(ray.position.x, ray.position.y + wheel_y, ray.position.z))
+
+# ----------------------------------------------------------------------------- recovery
+func _check_recovery(delta: float) -> void:
+	if global_position.y < -30.0:
 		respawn()
-	elif global_transform.basis.y.dot(Vector3.UP) < 0.25 and linear_velocity.length() < 3.0:
+		return
+	var upright := global_transform.basis.y.dot(Vector3.UP)
+	if upright < 0.25 and linear_velocity.length() < 3.0:
 		_flip_timer += delta
-		if _flip_timer > 2.0:
-			respawn()
 	else:
 		_flip_timer = 0.0
+	if _flip_timer > 2.0:
+		respawn()
 
+## Teleports the car back to the pose it was spawned with and clears all motion.
+func respawn() -> void:
+	respawn_at(_spawn_transform)
 
-func _shift_gear(dir: int) -> void:
-	var max_gear: int = specs.gear_ratios.size() - 1
-	var target_gear := clampi(_current_gear_idx + dir, 0, max_gear)
-	if target_gear != _current_gear_idx:
-		_is_shifting = true
-		_clutch_delay_timer = 0.18 # ~180ms shift delay
-		_current_gear_idx = target_gear
-		get_tree().create_timer(0.18).timeout.connect(func(): _is_shifting = false)
+## Teleports the car to [param target] and clears all motion.
+func respawn_at(target: Transform3D) -> void:
+	global_transform = target
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+	steer_angle = 0.0
+	throttle_input = 0.0
+	brake_input = 0.0
+	handbrake_input = 0.0
+	_gear_index = 0
+	gear_number = 1
+	engine_rpm = idle_rpm
+	_shift_timer = 0.0
+	_flip_timer = 0.0
+	_engine_force = 0.0
+	is_reversing = false
+	_wheel_spin.fill(0.0)
 
-
-func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
-	var dt := state.step
-	if dt <= 0.0:
-		return
-	
-	# 1. Calculate Velocity & Speed Telemetry
-	var local_vel := global_transform.basis.inverse() * linear_velocity
-	speed_kmh = absf(local_vel.z) * 3.6
-	is_reversing = (_current_gear_idx == 0) or (local_vel.z > 0.5 and _brake_input > 0.1)
-	gear_number = 0 if is_reversing else (_current_gear_idx - 1) # 0=R, 1=1st, 2=2nd...
-	
-	# 2. Steering & Dynamic Speed-Sensitive Steering Angle
-	var max_steer_rad := deg_to_rad(34.0)
-	var speed_sens_factor := clampf(1.0 - (speed_kmh / 240.0) * 0.45, 0.55, 1.0)
-	steer_angle = move_toward(steer_angle, _raw_steer_input * max_steer_rad * speed_sens_factor, dt * 7.5)
-	
-	# 3. Longitudinal & Lateral Weight Transfer Computation (Forza 6 Dynamics)
-	var prev_speed: float = _wheel_speeds[0] if _wheel_speeds.size() > 0 else local_vel.z
-	var accel_long := (local_vel.z - prev_speed) / dt
-	var accel_lat := local_vel.x * local_vel.z * 0.08 # Centrifugal load
-	
-	var weight_transfer_long := (accel_long / 9.81) * (specs.cg_height / specs.wheelbase) * specs.mass * specs.weight_transfer_gain
-	var weight_transfer_lat := (accel_lat / 9.81) * (specs.cg_height / specs.track_width) * specs.mass * specs.weight_transfer_gain
-	
-	# Static axle loads
-	var total_weight := specs.mass * 9.81
-	var static_front_load := total_weight * specs.weight_bias_front * 0.5
-	var static_rear_load := total_weight * (1.0 - specs.weight_bias_front) * 0.5
-	
-	# Dynamic Normal Loads (Fz) per wheel: [FL, FR, RL, RR]
-	var fz_fl := clampf(static_front_load - weight_transfer_long * 0.5 - weight_transfer_lat, 80.0, total_weight)
-	var fz_fr := clampf(static_front_load - weight_transfer_long * 0.5 + weight_transfer_lat, 80.0, total_weight)
-	var fz_rl := clampf(static_rear_load + weight_transfer_long * 0.5 - weight_transfer_lat, 80.0, total_weight)
-	var fz_rr := clampf(static_rear_load + weight_transfer_long * 0.5 + weight_transfer_lat, 80.0, total_weight)
-	var wheel_loads: PackedFloat32Array = PackedFloat32Array([fz_fl, fz_fr, fz_rl, fz_rr])
-	
-	# 4. Raycast Suspension & Tire Force Simulation
-	var total_scrub := 0.0
-	for i in range(4):
-		var wheel_node := _wheel_nodes[i] as Node3D
-		var wheel_pos := wheel_node.global_position
-		
-		# Perform raycast downward from wheel anchor
-		var ray_origin := wheel_pos + global_transform.basis.y * 0.15
-		var ray_dir := -global_transform.basis.y * (specs.max_suspension_travel + 0.45)
-		
-		var query := PhysicsRayQueryParameters3D.create(ray_origin, ray_origin + ray_dir)
-		query.exclude = [self.get_rid()]
-		var space_state := state.get_space_state()
-		var hit := space_state.intersect_ray(query)
-		
-		if not hit.is_empty():
-			_wheel_grounded[i] = 1
-			_wheel_contact[i] = hit.position
-			
-			var hit_pos: Vector3 = hit.position
-			var hit_dist := wheel_pos.distance_to(hit_pos)
-			var compression := clampf(specs.max_suspension_travel - hit_dist, 0.0, specs.max_suspension_travel)
-			
-			# Spring force (Hooke's Law) + Damper force
-			var spring_force := compression * specs.spring_stiffness
-			var wheel_vel_y := state.get_velocity_at_local_position(wheel_pos - global_transform.origin).dot(global_transform.basis.y)
-			var damping_force := -wheel_vel_y * (2.0 * sqrt(specs.spring_stiffness * specs.mass * 0.25) * specs.damping_ratio)
-			
-			var total_susp_force := maxf(0.0, spring_force + damping_force)
-			state.apply_force(global_transform.basis.y * total_susp_force, wheel_pos - global_transform.origin)
-			
-			# Tire Friction & Slip Forces (Pacejka approximation)
-			var surface_vel := state.get_velocity_at_local_position(wheel_pos - global_transform.origin)
-			var forward_dir := -global_transform.basis.z
-			var right_dir := global_transform.basis.x
-			
-			if i < 2: # Steered Front Wheels
-				forward_dir = (global_transform.basis.rotated(global_transform.basis.y, steer_angle) * Vector3.FORWARD).normalized()
-			
-			var f_vel := surface_vel.dot(forward_dir)
-			var r_vel := surface_vel.dot(right_dir)
-			
-			# Slip angle & grip limit
-			var slip_angle := atan2(r_vel, absf(f_vel) + 1.0)
-			var grip_multiplier := specs.tire_grip_mult
-			if i >= 2 and handbrake_input > 0.1:
-				grip_multiplier *= 0.32 # Handbrake locks rear wheels into drift
-			
-			var max_friction_force: float = wheel_loads[i] * grip_multiplier
-			
-			# Lateral cornering grip force
-			var lateral_force_mag: float = -slip_angle * 13500.0 * (wheel_loads[i] / static_front_load)
-			lateral_force_mag = clampf(lateral_force_mag, -max_friction_force, max_friction_force)
-			state.apply_force(right_dir * lateral_force_mag, wheel_pos - global_transform.origin)
-			
-			tire_slip_velocities[i] = absf(r_vel)
-			total_scrub += absf(r_vel)
-			_wheel_speeds[i] = f_vel
-			
-			# Visual Wheel Animation (Spin & Steer)
-			var wheel_radius: float = 0.31
-			_wheel_spin[i] = fposmod(_wheel_spin[i] - (f_vel / wheel_radius) * dt, TAU)
-			var s_angle: float = steer_angle if i < 2 else 0.0
-			wheel_node.transform.basis = Basis(Vector3.UP, s_angle) * Basis(Vector3.RIGHT, _wheel_spin[i])
-		else:
-			_wheel_grounded[i] = 0
-			_wheel_speeds[i] = 0.0
-			tire_slip_velocities[i] = 0.0
-	
-	tire_scrub_intensity = clampf(total_scrub / 10.0, 0.0, 1.0)
-	
-	# 5. Drivetrain Engine & Torque Simulation
-	_simulate_drivetrain(dt)
-	
-	# 6. Apply Engine Propulsion Force to Wheels
-	_apply_propulsion_forces(state)
-
-
-## ============================================================================
-## DRIVETRAIN & ENGINE TORQUE CURVE
-## ============================================================================
-
-func _simulate_drivetrain(dt: float) -> void:
-	if _current_gear_idx == 1 or _is_shifting or _clutch_delay_timer > 0.0:
-		var target_idle = specs.idle_rpm if _throttle_input <= 0.01 else specs.idle_rpm + _throttle_input * 4000.0
-		engine_rpm = move_toward(engine_rpm, target_idle, dt * 3200.0)
-		return
-	
-	# Calculate wheel-based RPM in gear
-	var avg_wheel_speed_mps := (_wheel_speeds[2] + _wheel_speeds[3]) * 0.5
-	var gear_ratio_val := specs.gear_ratios[_current_gear_idx]
-	var calculated_rpm := absf(avg_wheel_speed_mps) * 30.0 * absf(gear_ratio_val) * specs.final_drive / 3.14159
-	
-	var target_rpm = maxf(specs.idle_rpm, calculated_rpm)
-	if _throttle_input > 0.0 and _current_gear_idx >= 2:
-		engine_rpm = move_toward(engine_rpm, target_rpm + _throttle_input * 2000.0, dt * 5000.0)
-	else:
-		engine_rpm = move_toward(engine_rpm, target_rpm, dt * 3500.0)
-	
-	engine_rpm = clampf(engine_rpm, specs.idle_rpm, specs.redline_rpm)
-
-
-func _apply_propulsion_forces(state: PhysicsDirectBodyState3D) -> void:
-	if _current_gear_idx == 1 or _is_shifting:
-		return
-	
-	# Torque curve estimation based on peak HP & Torque RPM
-	var rpm_ratio := engine_rpm / specs.peak_torque_rpm
-	var torque_curve_factor := sin(clampf(rpm_ratio * 1.5, 0.0, 3.14159))
-	if engine_rpm > specs.redline_rpm - 300.0:
-		torque_curve_factor *= 0.15 # Rev limiter soft cut
-	
-	var available_torque := (specs.max_torque_nm * maxf(0.35, torque_curve_factor)) * _throttle_input
-	var gear_ratio_val := specs.gear_ratios[_current_gear_idx]
-	var total_drive_ratio := gear_ratio_val * specs.final_drive
-	var wheel_radius := 0.31 # Standard Touge tire radius
-	var tractive_force := (available_torque * total_drive_ratio / wheel_radius)
-	
-	# Brake and Reverse Logic
-	if _brake_input > 0.0:
-		if speed_kmh < 3.5 and _brake_input > 0.2:
-			# Auto-shift to Reverse when holding brake at low speed
-			_current_gear_idx = 0
-			tractive_force = -specs.max_torque_nm * 0.95 * _brake_input * specs.final_drive / wheel_radius
-		else:
-			var brake_force_vec = -linear_velocity.normalized() * _brake_input * specs.mass * 9.5
-			state.apply_central_force(brake_force_vec)
-	elif _current_gear_idx == 0:
-		# In Reverse gear, pressing throttle accelerates backwards
-		tractive_force = -available_torque * absf(gear_ratio_val) * specs.final_drive / wheel_radius * 0.90
-	
-	# Distribute Torque according to Drivetrain Type (FR vs ATTESA AWD)
-	if specs.drive_type == "FR":
-		# Rear-Wheel Drive with Mechanical 2-Way LSD simulation
-		var force_vector = -global_transform.basis.z * (tractive_force * 0.5)
-		state.apply_force(force_vector, _wheel_nodes[2].global_position - global_transform.origin)
-		state.apply_force(force_vector, _wheel_nodes[3].global_position - global_transform.origin)
-	elif specs.drive_type == "AWD":
-		# Nissan ATTESA E-TS Active Torque Split (Rear biased, dynamically shifts up to 50% front)
-		var front_split := clampf(0.15 + _throttle_input * 0.35, 0.15, 0.50)
-		var rear_split := 1.0 - front_split
-		
-		var f_force = -global_transform.basis.z * (tractive_force * front_split * 0.5)
-		var r_force = -global_transform.basis.z * (tractive_force * rear_split * 0.5)
-		
-		state.apply_force(f_force, _wheel_nodes[0].global_position - global_transform.origin)
-		state.apply_force(f_force, _wheel_nodes[1].global_position - global_transform.origin)
-		state.apply_force(r_force, _wheel_nodes[2].global_position - global_transform.origin)
-		state.apply_force(r_force, _wheel_nodes[3].global_position - global_transform.origin)
+## Marks [param target] as the pose [method respawn] returns to.
+func set_spawn_transform(target: Transform3D) -> void:
+	_spawn_transform = target
