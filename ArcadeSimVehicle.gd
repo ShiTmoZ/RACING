@@ -15,8 +15,8 @@ signal gear_changed(new_gear: int)
 ## RayCast3D nodes whose origin is the suspension mount and whose ray points
 ## straight down along -Y.  Expected order: FL, FR, RL, RR.
 @export var wheel_rays: Array[RayCast3D] = []
-## Visual wheel meshes, same order as [member wheel_rays].
-@export var wheel_meshes: Array[MeshInstance3D] = []
+## Visual wheel nodes, same order as [member wheel_rays].
+@export var wheel_meshes: Array[Node3D] = []
 ## Index into [member wheel_rays] for the two steered wheels.
 @export var front_wheel_indices: Array[int] = [0, 1]
 ## Index into [member wheel_rays] for the driven wheels (RWD by default).
@@ -117,8 +117,14 @@ func _physics_process(delta: float) -> void:
 	_apply_aero()
 	_update_wheel_visuals(delta)
 	_check_recovery(delta)
+	if r34_model != null:
+		r34_model.is_braking = (brake_input > 0.05) or (handbrake_input > 0.1)
+		r34_model.is_reversing = is_reversing
+		r34_model.headlights_on = true
 
 # ----------------------------------------------------------------------------- setup
+var r34_model: R34SkylineModeler = null
+
 func _resolve_wheel_nodes() -> void:
 	# The scene wires these through exported node references, but the controller
 	# stays usable when it is instanced from code with nothing wired at all.
@@ -132,15 +138,19 @@ func _resolve_wheel_nodes() -> void:
 			if child is RayCast3D:
 				wheel_rays.append(child as RayCast3D)
 
-	var meshes_valid := not wheel_meshes.is_empty()
-	for mesh in wheel_meshes:
-		if mesh == null:
-			meshes_valid = false
-	if not meshes_valid:
-		wheel_meshes.clear()
-		for child in get_children():
-			if child is MeshInstance3D and String(child.name).begins_with("Wheel"):
-				wheel_meshes.append(child as MeshInstance3D)
+	r34_model = get_node_or_null("R34SkylineModeler") as R34SkylineModeler
+	if r34_model != null and r34_model.WheelFL != null:
+		wheel_meshes = [r34_model.WheelFL, r34_model.WheelFR, r34_model.WheelRL, r34_model.WheelRR]
+	else:
+		var meshes_valid := not wheel_meshes.is_empty()
+		for mesh in wheel_meshes:
+			if mesh == null:
+				meshes_valid = false
+		if not meshes_valid:
+			wheel_meshes.clear()
+			for child in get_children():
+				if child is Node3D and String(child.name).begins_with("Wheel"):
+					wheel_meshes.append(child as Node3D)
 
 func _build_wheel_flags() -> void:
 	var count := wheel_rays.size()
@@ -382,11 +392,14 @@ func _update_wheel_visuals(delta: float) -> void:
 		if _wheel_spin[i] > TAU or _wheel_spin[i] < -TAU:
 			_wheel_spin[i] = fposmod(_wheel_spin[i], TAU)
 
-		# Y = steering, X = rolling, then tip the cylinder so its axis lies on X.
 		var steer_basis := Basis(Vector3.UP, _wheel_steer[i])
 		var spin_basis := Basis(Vector3.RIGHT, _wheel_spin[i])
-		var tip_basis := Basis(Vector3.BACK, PI * 0.5)
-		var wheel_basis := steer_basis * spin_basis * tip_basis
+		var wheel_basis: Basis
+		if r34_model != null:
+			wheel_basis = steer_basis * spin_basis
+		else:
+			var tip_basis := Basis(Vector3.BACK, PI * 0.5)
+			wheel_basis = steer_basis * spin_basis * tip_basis
 		mesh.transform = Transform3D(wheel_basis, Vector3(ray.position.x, ray.position.y + wheel_y, ray.position.z))
 
 # ----------------------------------------------------------------------------- recovery
