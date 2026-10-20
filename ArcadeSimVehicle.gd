@@ -137,7 +137,7 @@ func _physics_process(delta: float) -> void:
 		r34_model.headlights_on = true
 
 # ----------------------------------------------------------------------------- setup
-var r34_model: R34SkylineModeler = null
+var r34_model: Node3D = null
 
 func _resolve_wheel_nodes() -> void:
 	# The scene wires these through exported node references, but the controller
@@ -152,8 +152,8 @@ func _resolve_wheel_nodes() -> void:
 			if child is RayCast3D:
 				wheel_rays.append(child as RayCast3D)
 
-	r34_model = get_node_or_null("R34SkylineModeler") as R34SkylineModeler
-	if r34_model != null and r34_model.WheelFL != null:
+	r34_model = get_node_or_null("R34SkylineModeler")
+	if r34_model != null and "WheelFL" in r34_model and r34_model.WheelFL != null:
 		wheel_meshes = [r34_model.WheelFL, r34_model.WheelFR, r34_model.WheelRL, r34_model.WheelRR]
 	else:
 		var meshes_valid := not wheel_meshes.is_empty()

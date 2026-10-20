@@ -1191,7 +1191,7 @@ func _create_multimesh_batch(
 	shadow_mode: GeometryInstance3D.ShadowCastingSetting,
 	cull_distance: float
 ) -> MultiMeshInstance3D:
-	if transforms.is_empty():
+	if transforms.is_empty() or mesh_resource == null:
 		return null
 		
 	var mm: MultiMesh = MultiMesh.new()

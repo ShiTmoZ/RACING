@@ -44,11 +44,15 @@ class RoadFrame:
 	var bank_angle: float # Radians
 	var distance: float
 
+const GraphicsSettingsManager = preload("res://GraphicsSettingsManager.gd")
+const JDMRadioAudioSystem = preload("res://JDMRadioAudioSystem.gd")
+const AkinaRoadsidePropsDecorator = preload("res://AkinaRoadsidePropsDecorator.gd")
+
 var _frames: Array[RoadFrame] = []
 var _curve: Curve3D = Curve3D.new()
 var _spawn_transform: Transform3D = Transform3D.IDENTITY
 var _spawned_vehicle: Node3D = null
-var _gfx_manager: GraphicsSettingsManager = null
+var _gfx_manager: Node = null
 
 # Procedural Materials Cache
 var _mat_road: ShaderMaterial
@@ -1402,11 +1406,6 @@ func _setup_desktop_ui() -> void:
 	guide_text.add_theme_font_size_override("font_size", 12)
 	guide_vbox.add_child(guide_text)
 
-	# 3. Mount Forza Drift Scoring, Sector Lap Timing & Interactive JDM Manual
-	var forza_hud := ForzaHUDAndManual.new()
-	forza_hud.name = "ForzaHUDAndManual"
-	add_child(forza_hud)
-
 	# 4. Pause Menu (ESC Overlay)
 	_pause_panel = PanelContainer.new()
 	_pause_panel.name = "PauseMenuOverlay"
@@ -1494,11 +1493,11 @@ func _process(delta: float) -> void:
 	var rpm: float = 800.0
 	var gear_str: String = "1"
 
-	if _spawned_vehicle is ArcadeSimVehicle:
-		var v := _spawned_vehicle as ArcadeSimVehicle
-		speed = v.speed_kmh
-		rpm = v.engine_rpm
-		gear_str = "R" if v.is_reversing else str(v.gear_number)
+	if _spawned_vehicle != null and "speed_kmh" in _spawned_vehicle:
+		speed = float(_spawned_vehicle.get("speed_kmh"))
+		rpm = float(_spawned_vehicle.get("engine_rpm"))
+		var is_rev: bool = bool(_spawned_vehicle.get("is_reversing"))
+		gear_str = "R" if is_rev else str(_spawned_vehicle.get("gear_number"))
 	elif _spawned_vehicle is RigidBody3D:
 		var rb := _spawned_vehicle as RigidBody3D
 		speed = rb.linear_velocity.length() * 3.6

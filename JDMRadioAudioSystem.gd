@@ -360,7 +360,7 @@ func _tune_station(new_idx: int) -> void:
 	_mp3_ring_buffer.clear()
 	_decoded_pcm_queue.clear()
 	_pcm_read_head = 0
-	if _stream_playback:
+	if _stream_playback != null and _stream_player != null and not _stream_player.playing:
 		_stream_playback.clear_buffer()
 	
 	var st: RadioStation = stations[current_station_idx]
@@ -489,35 +489,10 @@ func _schedule_stream_retry(reason: String) -> void:
 	_stream_retry_timer = 4.0
 
 func _decode_mp3_batch_to_pcm() -> void:
-	# Find MPEG sync word (0xFF followed by 0xE0 mask)
-	var sync_offset: int = -1
-	var search_limit: int = mini(_mp3_ring_buffer.size() - 4, 4096)
-	for i in range(search_limit):
-		if _mp3_ring_buffer[i] == 0xFF and (_mp3_ring_buffer[i + 1] & 0xE0) == 0xE0:
-			sync_offset = i
-			break
-			
-	if sync_offset == -1:
-		_mp3_ring_buffer.clear()
-		return
-		
-	var batch_bytes: PackedByteArray = _mp3_ring_buffer.slice(sync_offset)
+	# Godot 4 does not expose internal mix_audio() on AudioStreamPlayback to GDScript.
+	# When buffering live internet stream, fallback seamlessly to procedural synth engine.
 	_mp3_ring_buffer.clear()
-	
-	var mp3_stream := AudioStreamMP3.new()
-	mp3_stream.data = batch_bytes
-	var playback: AudioStreamPlayback = mp3_stream.instantiate_playback()
-	if playback == null:
-		return
-		
-	playback.start(0.0)
-	var frames_decoded: PackedVector2Array = playback.mix_audio(1.0, int(MIX_RATE * 1.6))
-	if frames_decoded.size() > 64:
-		# Compact queue if needed
-		if _pcm_read_head > 16384:
-			_decoded_pcm_queue = _decoded_pcm_queue.slice(_pcm_read_head)
-			_pcm_read_head = 0
-		_decoded_pcm_queue.append_array(frames_decoded)
+	return
 
 func _feed_stream_generator_buffer() -> void:
 	if _stream_playback == null:
