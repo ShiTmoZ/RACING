@@ -44,7 +44,7 @@ class RoadFrame:
 	var bank_angle: float # Radians
 	var distance: float
 
-const GraphicsSettingsManager = preload("res://GraphicsSettingsManager.gd")
+const GraphicsSettingsManager = preload("res://JDMGraphicsSettingsManager.gd")
 const JDMRadioAudioSystem = preload("res://JDMRadioAudioSystem.gd")
 const AkinaRoadsidePropsDecorator = preload("res://AkinaRoadsidePropsDecorator.gd")
 const JDMVehicleFleetManager = preload("res://JDMVehicleFleetManager.gd")
