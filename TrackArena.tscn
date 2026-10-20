@@ -1,0 +1,86 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://TrackArena.gd" id="1_arena"]
+[ext_resource type="Script" path="res://ArcadeChaseCamera.gd" id="2_camera"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_arena"]
+sky_top_color = Color(0.105, 0.235, 0.45, 1)
+sky_horizon_color = Color(0.6, 0.66, 0.73, 1)
+sky_curve = 0.12
+sky_energy_multiplier = 1.0
+ground_bottom_color = Color(0.06, 0.065, 0.07, 1)
+ground_horizon_color = Color(0.52, 0.55, 0.58, 1)
+ground_curve = 0.02
+sun_angle_max = 12.0
+sun_curve = 0.08
+
+[sub_resource type="Sky" id="Sky_arena"]
+sky_material = SubResource("ProceduralSkyMaterial_arena")
+radiance_size = 4
+
+[sub_resource type="Environment" id="Environment_arena"]
+background_mode = 2
+sky = SubResource("Sky_arena")
+ambient_light_source = 3
+ambient_light_color = Color(1, 1, 1, 1)
+ambient_light_sky_contribution = 1.0
+ambient_light_energy = 0.9
+reflected_light_source = 2
+tonemap_mode = 3
+tonemap_exposure = 1.0
+tonemap_white = 6.0
+ssao_enabled = true
+ssao_radius = 1.2
+ssao_intensity = 1.8
+ssao_power = 1.5
+sdfgi_enabled = true
+sdfgi_use_occlusion = true
+sdfgi_read_sky_light = true
+sdfgi_min_cell_size = 0.15
+sdfgi_cascades = 4
+ssr_enabled = true
+ssr_max_steps = 96
+ssr_fade_in = 0.12
+ssr_fade_out = 2.0
+ssr_depth_tolerance = 0.25
+glow_enabled = true
+glow_intensity = 0.45
+glow_strength = 1.0
+glow_bloom = 0.05
+glow_blend_mode = 1
+glow_hdr_threshold = 1.15
+fog_enabled = true
+fog_light_color = Color(0.6, 0.68, 0.8, 1)
+fog_light_energy = 0.7
+fog_density = 0.0022
+fog_aerial_perspective = 0.45
+fog_sky_affect = 0.25
+adjustment_enabled = true
+adjustment_brightness = 1.0
+adjustment_contrast = 1.06
+adjustment_saturation = 1.05
+
+[node name="TrackArena" type="Node3D"]
+script = ExtResource("1_arena")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_arena")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-48, -35, 0)
+light_color = Color(1, 0.96, 0.9, 1)
+light_energy = 1.3
+shadow_enabled = true
+directional_shadow_mode = 2
+directional_shadow_blend_splits = true
+directional_shadow_max_distance = 420.0
+shadow_bias = 0.03
+
+[node name="ChaseCamera" type="Camera3D" parent="."]
+position = Vector3(0, 6, 16)
+rotation_degrees = Vector3(-16, 0, 0)
+current = true
+fov = 62.0
+near = 0.08
+far = 1500.0
+script = ExtResource("2_camera")

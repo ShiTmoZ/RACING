@@ -1,0 +1,57 @@
+name: "Godot 4.3 CI Build & Release"
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: 4.3
+  EXPORT_NAME: RACING
+
+jobs:
+  export-windows:
+    name: Windows Desktop Export
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Setup Godot Engine 4.3
+        uses: abarichello/godot-ci@4.3
+        with:
+          channel: stable
+
+      - name: Export Windows Executable
+        run: |
+          mkdir -v -p build/windows
+          godot --headless --verbose --export-release "Windows Desktop" build/windows/$EXPORT_NAME.exe
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RACING-Windows-x86_64
+          path: build/windows/
+
+  export-linux:
+    name: Linux Server / Desktop Export
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Setup Godot Engine 4.3
+        uses: abarichello/godot-ci@4.3
+        with:
+          channel: stable
+
+      - name: Export Linux Binary
+        run: |
+          mkdir -v -p build/linux
+          godot --headless --verbose --export-release "Linux/X11" build/linux/$EXPORT_NAME.x86_64
+
+      - name: Upload Linux Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RACING-Linux-x86_64
+          path: build/linux/

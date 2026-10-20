@@ -1,0 +1,9 @@
+# Godot 4.x gitignore
+.godot/
+*.translation
+build/
+bin/
+*.tmp
+*.log
+.DS_Store
+Thumbs.db
