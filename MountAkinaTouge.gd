@@ -118,6 +118,9 @@ func _build_entire_environment() -> void:
 	# 8. Populate JDM Landmarks: Neon Kanji Gantries, Torii Gates, Streetlights & Sakura
 	_build_landmarks_and_props()
 	_build_sakura_particle_systems()
+	
+	# 9. Populate Procedural Roadside Props (Poles, Catenary Wires, Torii, Pine & Sakura MultiMeshes)
+	_build_roadside_props_decorator()
 
 
 # ==============================================================================
@@ -1235,6 +1238,13 @@ func _build_sakura_particle_systems() -> void:
 		particles.process_material = proc_mat
 		particles.draw_pass_1 = petal_quad
 		add_child(particles)
+
+
+func _build_roadside_props_decorator() -> void:
+	var decorator := AkinaRoadsidePropsDecorator.new()
+	decorator.name = "AkinaRoadsidePropsDecorator"
+	add_child(decorator)
+	decorator.decorate_touge(_curve, [])
 
 
 # ==============================================================================
