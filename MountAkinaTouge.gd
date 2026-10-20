@@ -1313,6 +1313,24 @@ func _spawn_player_vehicle() -> void:
 				chase_cam.set("vehicle", _spawned_vehicle)
 			elif chase_cam.has_method("set_target"):
 				chase_cam.call("set_target", _spawned_vehicle)
+	
+	# Attach JDM Drift VFX System (Tire smoke, skidmarks, exhaust anti-lag)
+	var vfx_script: Script = load("res://JDMDriftVFXSystem.gd")
+	if vfx_script != null:
+		var vfx: Node3D = vfx_script.new() as Node3D
+		if vfx != null:
+			vfx.name = "JDMDriftVFXSystem"
+			vfx.set("vehicle", _spawned_vehicle)
+			_spawned_vehicle.add_child(vfx)
+
+	# Attach JDM Speedometer HUD (Defi / GReddy Digital HUD Cluster)
+	var hud_script: Script = load("res://JDMSpeedometerHUD.gd")
+	if hud_script != null:
+		var hud: CanvasLayer = hud_script.new() as CanvasLayer
+		if hud != null:
+			hud.name = "JDMSpeedometerHUD"
+			hud.set("target_vehicle", _spawned_vehicle)
+			add_child(hud)
 
 
 func _find_camera_recursive(node: Node) -> Camera3D:
