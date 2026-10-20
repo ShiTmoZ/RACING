@@ -1,799 +1,1000 @@
 class_name JDMRadioAudioSystem
-extends CanvasLayer
+extends Node
+
+## ============================================================================
 ## ShiTmoZ/RACING - Mount Akina Touge
-## Retro JDM KRC-990SP Head Unit HUD & Dual-Engine Audio Architecture
-## Strictly isolated Audio & UI Layer. Zero Physics/Collision side effects.
+## JDM FM Radio & Real-Time Procedural Music Synthesizer (Godot 4.3 Forward+)
+## ============================================================================
+## 100% self-contained, zero-drop procedural synthesis engine & VFD HUD.
+## Replaces legacy HTTP socket MP3 decoders with sample-accurate DSP voices.
+## ============================================================================
 
-# ==============================================================================
-# CONSTANTS & TELEMETRY CONFIGURATION
-# ==============================================================================
-const RADIO_BUS_NAME: String = "JDM_Radio_Bus"
+# --- Audio Engine Constants ---
 const MIX_RATE: float = 44100.0
-const SYNTH_BUFFER_LEN: float = 0.08 # 80ms low-latency buffer for RPM tracking
+const BUFFER_LEN: float = 0.12 # 120ms buffer prevents Vulkan shader compilation stutters
+const RADIO_BUS_NAME: String = "JDM_Radio_Bus"
+const NUM_VFD_BANDS: int = 12
+const SEGMENTS_PER_BAND: int = 14
 
-const COLOR_CHASSIS_BG := Color(0.07, 0.07, 0.09, 0.96)
-const COLOR_CHASSIS_TRIM := Color(0.18, 0.19, 0.22, 1.0)
-const COLOR_VFD_GLASS := Color(0.02, 0.04, 0.05, 0.98)
-const COLOR_VFD_CYAN := Color(0.0, 0.95, 0.88, 1.0)
-const COLOR_VFD_CYAN_DIM := Color(0.0, 0.22, 0.24, 0.45)
-const COLOR_VFD_AMBER := Color(1.0, 0.58, 0.05, 1.0)
-const COLOR_VFD_AMBER_DIM := Color(0.28, 0.14, 0.02, 0.45)
-const COLOR_VFD_RED := Color(1.0, 0.18, 0.22, 1.0)
+# --- Station Definitions ---
+enum StationID {
+	EUROBEAT_AKINA = 0,
+	NIGHTWAVE_CITYPOP = 1,
+	DRIFT_PHONK = 2
+}
 
-const DECK_WIDTH: float = 390.0
-const DECK_HEIGHT: float = 128.0
-const MARGIN_TOP: float = 18.0
-const MARGIN_RIGHT: float = 18.0
-
-# ==============================================================================
-# STATION DEFINITIONS
-# ==============================================================================
-enum EngineType { LIVE_STREAM, PROCEDURAL_SYNTH }
-
-class RadioStation:
-	var freq: String
-	var title: String
-	var url: String
-	var type: EngineType
-	
-	func _init(p_freq: String, p_title: String, p_url: String, p_type: EngineType) -> void:
-		freq = p_freq
-		title = p_title
-		url = p_url
-		type = p_type
-
-var stations: Array[RadioStation] = [
-	RadioStation.new("88.6 FM", "SUPER EUROBEAT TOUGE", "http://stream.laut.fm/eurobeat", EngineType.LIVE_STREAM),
-	RadioStation.new("92.4 FM", "NIGHTWAVE PLAZA TOKYO", "https://radio.plaza.one/mp3", EngineType.LIVE_STREAM),
-	RadioStation.new("96.8 FM", "RAINY TOUGE CHILLHOP", "https://play.streamafrica.net/lofiradio", EngineType.LIVE_STREAM),
-	RadioStation.new("102.1 FM", "INITIAL DRIFT SYNTH (OFFLINE)", "", EngineType.PROCEDURAL_SYNTH)
+const STATIONS: Array[Dictionary] = [
+	{
+		"freq": "88.6 FM",
+		"name": "SUPER EUROBEAT // AKINA SPECIAL",
+		"tracks": [
+			"DAVE R. - RUNNING IN THE AKINA 90s",
+			"MARKO P. - SPACE BOY OVERDRIVE",
+			"EDO BOYS - NO ONE SLEEP IN GUNMA"
+		],
+		"bpm": 155.0,
+		"accent_color": Color(1.0, 0.32, 0.12), # Pioneer Amber/Red
+		"vfd_color": Color(0.15, 0.95, 0.88)     # Classic VFD Cyan-Green
+	},
+	{
+		"freq": "94.2 FM",
+		"name": "NIGHTWAVE VAPOR // CITY POP",
+		"tracks": [
+			"TATSURO M. - BAYSIDE EXPRESSWAY 1986",
+			"MARIYA T. - PLASTIC TOUGE LOVE",
+			"OMEGA TRIBE - MIDNIGHT SHUTO WANGAN"
+		],
+		"bpm": 110.0,
+		"accent_color": Color(0.95, 0.25, 0.78), # Neon Magenta
+		"vfd_color": Color(0.35, 0.82, 1.0)      # Ice Blue VFD
+	},
+	{
+		"freq": "102.5 FM",
+		"name": "DRIFT PHONK // TOUGE BEATS",
+		"tracks": [
+			"KSLV AKINA - COWBELL DORIFTO",
+			"GHOSTFACE TOUGE - 86 REDLINE MURDER",
+			"TOKYO PLAYA - GUTTER RUNNER VIP"
+		],
+		"bpm": 130.0,
+		"accent_color": Color(0.65, 0.95, 0.15), # Toxic Lime
+		"vfd_color": Color(1.0, 0.68, 0.12)      # Amber Gold VFD
+	}
 ]
 
-# ==============================================================================
-# STATE VARIABLES
-# ==============================================================================
-var current_station_idx: int = 3 # Default to zero-drop synth on boot, or switch freely
-var master_volume_linear: float = 0.75
-var is_drawer_open: bool = true
-var is_handbook_muffled: bool = false
-var is_currently_muffled: bool = false
+# --- Musical Pitch Reference (MIDI Note to Hz) ---
+# Standard A4 = 440Hz, MIDI 69
+func _midi_to_hz(note: float) -> float:
+	return 440.0 * pow(2.0, (note - 69.0) / 12.0)
 
-# Read-only Passive Vehicle Telemetry (Normalized)
-var _telemetry_rpm_norm: float = 0.25 # 0.0 (Idle) to 1.0 (Redline)
-var _telemetry_drift_slip: float = 0.0 # 0.0 (Grip) to 1.0 (Full lock slide)
-var _cached_vehicle_node: Node = null
-var _telemetry_scan_timer: float = 0.0
+# --- Sequencer Patterns (16 Steps per Bar, 4 Bars Loop = 64 Steps) ---
 
-# Audio Bus & Effects
+# Station 0: Eurobeat (A Minor -> F Major -> G Major -> E Major / A Minor)
+# Iconic "Running in the 90s / Space Boy" style high-energy brass riff
+const EUROBEAT_LEAD_NOTES: Array[int] = [
+	# Bar 1 (Am)
+	69, 0, 72, 69, 76, 0, 74, 72, 71, 72, 74, 72, 69, 0, 64, 67,
+	# Bar 2 (F)
+	69, 0, 72, 69, 77, 0, 76, 74, 72, 74, 76, 72, 69, 0, 65, 67,
+	# Bar 3 (G)
+	71, 0, 74, 71, 79, 0, 77, 76, 74, 76, 77, 74, 71, 0, 67, 69,
+	# Bar 4 (E7 -> Turnaround)
+	71, 72, 71, 68, 64, 68, 71, 74, 76, 0, 79, 76, 80, 76, 74, 71
+]
+
+const EUROBEAT_BASS_ROOTS: Array[int] = [
+	45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 43, 43, # Am
+	41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 40, 40, # F
+	43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 41, 41, # G
+	40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 42, 42, 44, 44, 47, 44  # E7
+]
+
+# Station 1: Nightwave / City Pop (Fmaj7 -> Em7 -> Dm7 -> Cmaj7/G13)
+const NIGHTWAVE_CHORDS: Array[Array] = [
+	[65, 69, 72, 76, 79], # Fmaj9
+	[64, 67, 71, 74, 79], # Em9
+	[62, 65, 69, 72, 76], # Dm9
+	[60, 64, 67, 71, 74]  # Cmaj9
+]
+
+const NIGHTWAVE_BASS_NOTES: Array[int] = [
+	# Bar 1 (F)
+	41, 0, 41, 53, 0, 41, 48, 53, 41, 0, 41, 53, 0, 48, 41, 40,
+	# Bar 2 (Em)
+	40, 0, 40, 52, 0, 40, 47, 52, 40, 0, 40, 52, 0, 47, 40, 39,
+	# Bar 3 (Dm)
+	38, 0, 38, 50, 0, 38, 45, 50, 38, 0, 38, 50, 0, 45, 38, 43,
+	# Bar 4 (C / G)
+	36, 0, 36, 48, 0, 36, 43, 48, 43, 0, 43, 55, 0, 50, 47, 43
+]
+
+const NIGHTWAVE_ARP_NOTES: Array[int] = [
+	72, 76, 79, 84, 79, 76, 72, 69, 72, 76, 79, 84, 88, 84, 79, 76,
+	71, 74, 79, 83, 79, 74, 71, 67, 71, 74, 79, 83, 86, 83, 79, 74,
+	69, 72, 76, 81, 76, 72, 69, 65, 69, 72, 76, 81, 84, 81, 76, 72,
+	67, 71, 74, 79, 74, 71, 67, 64, 67, 71, 74, 79, 83, 79, 74, 71
+]
+
+# Station 2: Drift Phonk (D# Minor Phrygian Cowbell Hook)
+const PHONK_COWBELL_NOTES: Array[int] = [
+	# Bar 1
+	63, 0, 63, 66, 63, 0, 62, 0, 63, 0, 63, 68, 66, 63, 62, 63,
+	# Bar 2
+	63, 0, 63, 66, 63, 0, 62, 0, 70, 0, 68, 0, 66, 63, 62, 58,
+	# Bar 3
+	63, 0, 63, 66, 63, 0, 62, 0, 63, 0, 63, 68, 66, 63, 62, 63,
+	# Bar 4
+	75, 0, 75, 74, 0, 70, 68, 66, 63, 63, 62, 62, 58, 0, 62, 0
+]
+
+const PHONK_808_NOTES: Array[int] = [
+	39, 39, 39, 39, 39, 39, 38, 38, 39, 39, 39, 44, 42, 39, 38, 39,
+	39, 39, 39, 39, 39, 39, 38, 38, 46, 46, 44, 44, 42, 39, 38, 34,
+	39, 39, 39, 39, 39, 39, 38, 38, 39, 39, 39, 44, 42, 39, 38, 39,
+	39, 39, 39, 38, 38, 34, 34, 34, 39, 39, 38, 38, 34, 34, 38, 38
+]
+
+# --- Audio Nodes & DSP References ---
+var _player: AudioStreamPlayer
+var _generator: AudioStreamGenerator
+var _playback: AudioStreamGeneratorPlayback
+var _spectrum_analyzer: AudioEffectSpectrumAnalyzerInstance
 var _bus_idx: int = -1
-var _spectrum_instance: AudioEffectSpectrumAnalyzerInstance = null
-var _lpf_effect: AudioEffectLowPassFilter = null
 
-# Audio Players
-var _synth_player: AudioStreamPlayer = null
-var _synth_playback: AudioStreamGeneratorPlayback = null
-var _stream_player: AudioStreamPlayer = null
-var _stream_playback: AudioStreamGeneratorPlayback = null
+# --- Radio State ---
+var current_station: int = StationID.EUROBEAT_AKINA
+var current_track_idx: int = 0
+var radio_powered: bool = true
+var master_volume_db: float = -3.0 # Default comfortable loud level
+var _tuning_static_timer: float = 0.0 # FM white noise burst when switching stations
+var _track_cycle_timer: float = 0.0
 
-# Engine A: Non-Blocking HTTP Streamer State
-var _http_client: HTTPClient = null
-var _stream_host: String = ""
-var _stream_port: int = 80
-var _stream_path: String = "/"
-var _stream_use_tls: bool = false
-var _stream_status_text: String = "STANDBY"
-var _stream_retry_timer: float = 0.0
-var _stream_redirect_hops: int = 0
-var _mp3_ring_buffer: PackedByteArray = PackedByteArray()
-var _decoded_pcm_queue: PackedVector2Array = PackedVector2Array()
-var _pcm_read_head: int = 0
-var _is_stream_fallback_active: bool = false
+# --- Real-Time Synthesizer State ---
+var _sample_clock: int = 0
+var _step_phase: float = 0.0
+var _current_step: int = -1
 
-# Engine B: Procedural Synthesizer State
-var _synth_phase_kick: float = 0.0
-var _synth_phase_kick_env: float = 1.0
-var _synth_phase_bass: float = 0.0
-var _synth_phase_lead: float = 0.0
-var _synth_phase_lfo: float = 0.0
-var _synth_noise_seed: int = 1337420
-var _synth_step_accumulator: float = 0.0
-var _synth_current_step: int = 0
-var _synth_bar_count: int = 0
+# Drum Envelopes & Phases
+var _kick_env: float = 0.0
+var _kick_pitch_env: float = 0.0
+var _kick_phase: float = 0.0
 
-# Musical patterns (MIDI note offsets for Phrygian/Minor Eurobeat drive)
-const BASS_SEQUENCE: Array[int] = [33, 45, 33, 45, 36, 48, 38, 50, 40, 52, 40, 52, 39, 51, 40, 52]
-const LEAD_ARPEGGIO: Array[int] = [69, 72, 76, 81, 76, 72, 83, 79, 76, 72, 69, 72, 76, 80, 83, 88]
+var _snare_env: float = 0.0
+var _snare_tone_phase: float = 0.0
 
-# UI & VFD Canvas Node
-var _deck_canvas: Control = null
-var _drawer_slide_tween: Tween = null
-var _fft_peaks: Array[float] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-var _fft_holds: Array[float] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-var _title_scroll_offset: float = 0.0
-var _cassette_reel_angle: float = 0.0
-var _key_flash_timers: Dictionary = {"prev": 0.0, "next": 0.0, "v_dn": 0.0, "v_up": 0.0, "hide": 0.0}
+var _hat_env: float = 0.0
+var _hat_decay_rate: float = 18.0
 
-# ==============================================================================
-# LIFECYCLE INITIALIZATION
-# ==============================================================================
+# Bass Voice
+var _bass_env: float = 0.0
+var _bass_freq: float = 55.0
+var _bass_phase1: float = 0.0
+var _bass_phase2: float = 0.0
+var _bass_lp_state: float = 0.0
+
+# Lead / Cowbell / Arp Voice
+var _lead_env: float = 0.0
+var _lead_freq: float = 440.0
+var _lead_target_freq: float = 440.0
+var _lead_phases: PackedFloat64Array = PackedFloat64Array([0.0, 0.0, 0.0, 0.0, 0.0])
+
+# Pad / Chord Voices (5-voice polyphonic for Nightwave / Eurobeat backing)
+var _pad_phases: PackedFloat64Array = PackedFloat64Array([0.0, 0.0, 0.0, 0.0, 0.0])
+var _pad_freqs: PackedFloat64Array = PackedFloat64Array([261.63, 329.63, 392.0, 493.88, 587.33])
+
+# Stereo Delay Ring Buffer (Simple 250ms ping-pong echo for space)
+var _delay_buf_l: PackedFloat32Array = PackedFloat32Array()
+var _delay_buf_r: PackedFloat32Array = PackedFloat32Array()
+var _delay_write_pos: int = 0
+var _delay_samples: int = 11025 # 250ms at 44.1kHz
+
+# PRNG for fast deterministic noise (Snare, Hats, FM Static)
+var _lfsr_seed: int = 0xACE1
+
+# --- VFD Spectrum Visualizer State ---
+var _vfd_bands: PackedFloat32Array = PackedFloat32Array()
+var _vfd_peaks: PackedFloat32Array = PackedFloat32Array()
+var _vfd_peak_hold_timers: PackedFloat32Array = PackedFloat32Array()
+var _ui_canvas: CanvasLayer
+var _vfd_control: Control
+var _marquee_offset: float = 0.0
+
+
+## ============================================================================
+## LIFECYCLE & INITIALIZATION
+## ============================================================================
+
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
-	layer = 110 # Render cleanly above standard racing gauges
-	
+	_init_dsp_arrays()
 	_setup_audio_bus()
-	_setup_audio_players()
-	_setup_vfd_hud()
+	_setup_audio_player()
+	_setup_vfd_ui()
+	_apply_station_settings(current_station, false)
+
+
+func _init_dsp_arrays() -> void:
+	_delay_buf_l.resize(_delay_samples)
+	_delay_buf_l.fill(0.0)
+	_delay_buf_r.resize(_delay_samples)
+	_delay_buf_r.fill(0.0)
 	
-	_tune_station(0) # Boot into Station 1 (88.6 FM Super Eurobeat)
+	_vfd_bands.resize(NUM_VFD_BANDS)
+	_vfd_bands.fill(0.0)
+	_vfd_peaks.resize(NUM_VFD_BANDS)
+	_vfd_peaks.fill(0.0)
+	_vfd_peak_hold_timers.resize(NUM_VFD_BANDS)
+	_vfd_peak_hold_timers.fill(0.0)
 
-func _exit_tree() -> void:
-	if _http_client != null:
-		_http_client.close()
-	if _bus_idx != -1 and _bus_idx < AudioServer.bus_count:
-		if AudioServer.get_bus_name(_bus_idx) == RADIO_BUS_NAME:
-			AudioServer.remove_bus(_bus_idx)
 
-# ==============================================================================
-# AUDIO BUS & DSP ARCHITECTURE
-# ==============================================================================
 func _setup_audio_bus() -> void:
 	_bus_idx = AudioServer.get_bus_index(RADIO_BUS_NAME)
 	if _bus_idx == -1:
-		AudioServer.add_bus()
-		_bus_idx = AudioServer.bus_count - 1
+		_bus_idx = AudioServer.bus_count
+		AudioServer.add_bus(_bus_idx)
 		AudioServer.set_bus_name(_bus_idx, RADIO_BUS_NAME)
 		AudioServer.set_bus_send(_bus_idx, "Master")
 	
-	# Clear existing effects if reloaded
+	# Clear any stale effects and attach Spectrum Analyzer + Gentle Compressor
 	for i in range(AudioServer.get_bus_effect_count(_bus_idx) - 1, -1, -1):
 		AudioServer.remove_bus_effect(_bus_idx, i)
 	
-	# 1. Live Spectrum Analyzer for 8-Bar VFD Display
 	var spectrum_fx := AudioEffectSpectrumAnalyzer.new()
 	spectrum_fx.buffer_length = 0.1
-	spectrum_fx.fft_size = AudioEffectSpectrumAnalyzer.FFT_SIZE_512
+	spectrum_fx.fft_size = AudioEffectSpectrumAnalyzer.FFT_SIZE_1024
 	AudioServer.add_bus_effect(_bus_idx, spectrum_fx, 0)
-	_spectrum_instance = AudioServer.get_bus_effect_instance(_bus_idx, 0) as AudioEffectSpectrumAnalyzerInstance
 	
-	# 2. Cabin Acoustic Muffle Low-Pass Filter (Pause / F1 Handbook)
-	_lpf_effect = AudioEffectLowPassFilter.new()
-	_lpf_effect.cutoff_hz = 20500.0
-	_lpf_effect.resonance = 0.65
-	_lpf_effect.db = AudioEffectFilter.FILTER_12DB
-	AudioServer.add_bus_effect(_bus_idx, _lpf_effect, 1)
-	
-	_apply_master_volume()
+	_spectrum_analyzer = AudioServer.get_bus_effect_instance(_bus_idx, 0) as AudioEffectSpectrumAnalyzerInstance
+	AudioServer.set_bus_volume_db(_bus_idx, master_volume_db)
 
-func _setup_audio_players() -> void:
-	# Engine B Player (Procedural Synth + Zero-Drop Fallback)
-	_synth_player = AudioStreamPlayer.new()
-	_synth_player.name = "EngineB_ProceduralSynth"
-	_synth_player.bus = RADIO_BUS_NAME
-	var synth_gen := AudioStreamGenerator.new()
-	synth_gen.mix_rate = MIX_RATE
-	synth_gen.buffer_length = SYNTH_BUFFER_LEN
-	_synth_player.stream = synth_gen
-	add_child(_synth_player)
-	_synth_player.play()
-	_synth_playback = _synth_player.get_stream_playback() as AudioStreamGeneratorPlayback
-	
-	# Engine A Player (Decoded Live HTTP Stream PCM feeder)
-	_stream_player = AudioStreamPlayer.new()
-	_stream_player.name = "EngineA_LiveStream"
-	_stream_player.bus = RADIO_BUS_NAME
-	var stream_gen := AudioStreamGenerator.new()
-	stream_gen.mix_rate = MIX_RATE
-	stream_gen.buffer_length = 0.5 # 500ms jitter buffer for HTTP chunks
-	_stream_player.stream = stream_gen
-	add_child(_stream_player)
-	_stream_player.play()
-	_stream_playback = _stream_player.get_stream_playback() as AudioStreamGeneratorPlayback
-	
-	_http_client = HTTPClient.new()
 
-# ==============================================================================
-# HUD CREATION & DRAW DISPATCH
-# ==============================================================================
-func _setup_vfd_hud() -> void:
-	_deck_canvas = Control.new()
-	_deck_canvas.name = "Kenwood_KRC990SP_Deck"
-	_deck_canvas.custom_minimum_size = Vector2(DECK_WIDTH, DECK_HEIGHT)
-	_deck_canvas.size = Vector2(DECK_WIDTH, DECK_HEIGHT)
-	_deck_canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_deck_canvas)
+func _setup_audio_player() -> void:
+	_generator = AudioStreamGenerator.new()
+	_generator.mix_rate = MIX_RATE
+	_generator.buffer_length = BUFFER_LEN
 	
-	_reposition_deck(false)
-	_deck_canvas.draw.connect(_on_deck_draw)
-	get_viewport().size_changed.connect(func(): _reposition_deck(false))
-
-func _reposition_deck(animate: bool = false) -> void:
-	if not is_instance_valid(_deck_canvas):
-		return
-	var vp_width: float = get_viewport().get_visible_rect().size.x
-	var open_x: float = vp_width - DECK_WIDTH - MARGIN_RIGHT
-	var closed_x: float = vp_width - 28.0 # Leave pull-tab visible on edge
-	var target_x: float = open_x if is_drawer_open else closed_x
+	_player = AudioStreamPlayer.new()
+	_player.name = "JDMGeneratorPlayer"
+	_player.stream = _generator
+	_player.bus = RADIO_BUS_NAME
+	add_child(_player)
 	
-	if animate:
-		if _drawer_slide_tween and _drawer_slide_tween.is_running():
-			_drawer_slide_tween.kill()
-		_drawer_slide_tween = create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-		_drawer_slide_tween.tween_property(_deck_canvas, "position:x", target_x, 0.28)
-		_drawer_slide_tween.parallel().tween_property(_deck_canvas, "position:y", MARGIN_TOP, 0.28)
-	else:
-		_deck_canvas.position = Vector2(target_x, MARGIN_TOP)
+	_player.play()
+	_playback = _player.get_stream_playback() as AudioStreamGeneratorPlayback
 
-# ==============================================================================
-# MAIN FRAME LOOP & INPUT HANDLING
-# ==============================================================================
-func _unhandled_key_input(event: InputEvent) -> void:
+
+## ============================================================================
+## INPUT HANDLING (Hotkeys: M, N, B, Vol Up/Down)
+## ============================================================================
+
+func _unhandled_input(event: InputEvent) -> void:
 	if not (event is InputEventKey and event.pressed and not event.echo):
 		return
 	
 	var key_event := event as InputEventKey
 	match key_event.keycode:
 		KEY_M:
-			is_drawer_open = not is_drawer_open
-			_key_flash_timers["hide"] = 0.25
-			_reposition_deck(true)
-			get_viewport().set_input_as_handled()
-		KEY_BRACKETLEFT:
-			_key_flash_timers["prev"] = 0.25
-			_tune_station((current_station_idx - 1 + stations.size()) % stations.size())
-			get_viewport().set_input_as_handled()
-		KEY_BRACKETRIGHT:
-			_key_flash_timers["next"] = 0.25
-			_tune_station((current_station_idx + 1) % stations.size())
-			get_viewport().set_input_as_handled()
-		KEY_MINUS:
-			_key_flash_timers["v_dn"] = 0.2
-			master_volume_linear = clampf(master_volume_linear - 0.08, 0.0, 1.0)
-			_apply_master_volume()
-			get_viewport().set_input_as_handled()
-		KEY_EQUAL:
-			_key_flash_timers["v_up"] = 0.2
-			master_volume_linear = clampf(master_volume_linear + 0.08, 0.0, 1.0)
-			_apply_master_volume()
-			get_viewport().set_input_as_handled()
-		KEY_F1:
-			# Toggle handbook acoustic muffle state passively (do not consume event so Handbook UI opens)
-			is_handbook_muffled = not is_handbook_muffled
+			toggle_radio_power()
+		KEY_N:
+			next_station()
+		KEY_B:
+			prev_station()
+		KEY_PAGEUP, KEY_BRACKETRIGHT, KEY_EQUAL:
+			adjust_volume(2.0)
+		KEY_PAGEDOWN, KEY_BRACKETLEFT, KEY_MINUS:
+			adjust_volume(-2.0)
+		KEY_UP:
+			# Allow Shift+Up or Alt+Up if player uses Arrow Up for throttle, or direct Up if unmapped
+			if key_event.shift_pressed or key_event.alt_pressed or not InputMap.has_action("ui_up"):
+				adjust_volume(2.0)
+		KEY_DOWN:
+			if key_event.shift_pressed or key_event.alt_pressed or not InputMap.has_action("ui_down"):
+				adjust_volume(-2.0)
+
+
+func toggle_radio_power() -> void:
+	radio_powered = not radio_powered
+	if _bus_idx != -1:
+		AudioServer.set_bus_mute(_bus_idx, not radio_powered)
+	if radio_powered:
+		_tuning_static_timer = 0.12
+	_vfd_control.queue_redraw()
+
+
+func next_station() -> void:
+	if not radio_powered:
+		radio_powered = true
+		AudioServer.set_bus_mute(_bus_idx, false)
+	current_station = (current_station + 1) % STATIONS.size()
+	_apply_station_settings(current_station, true)
+
+
+func prev_station() -> void:
+	if not radio_powered:
+		radio_powered = true
+		AudioServer.set_bus_mute(_bus_idx, false)
+	current_station = (current_station - 1 + STATIONS.size()) % STATIONS.size()
+	_apply_station_settings(current_station, true)
+
+
+func adjust_volume(delta_db: float) -> void:
+	master_volume_db = clampf(master_volume_db + delta_db, -36.0, 6.0)
+	if _bus_idx != -1:
+		AudioServer.set_bus_volume_db(_bus_idx, master_volume_db)
+	_vfd_control.queue_redraw()
+
+
+func _apply_station_settings(station_idx: int, play_tuning_burst: bool) -> void:
+	current_track_idx = randi() % (STATIONS[station_idx]["tracks"] as Array).size()
+	_track_cycle_timer = 0.0
+	if play_tuning_burst:
+		_tuning_static_timer = 0.18 # Classic FM radio dial static sweep
+	
+	# Reset delay buffer to avoid cross-station echo bleed
+	_delay_buf_l.fill(0.0)
+	_delay_buf_r.fill(0.0)
+	_vfd_control.queue_redraw()
+
+
+## ============================================================================
+## MAIN PROCESS & AUDIO BUFFER FILLING
+## ============================================================================
 
 func _process(delta: float) -> void:
-	_update_cabin_acoustics(delta)
-	_poll_passive_vehicle_telemetry(delta)
+	if not _player.playing:
+		_player.play()
+		_playback = _player.get_stream_playback() as AudioStreamGeneratorPlayback
 	
-	var active_station: RadioStation = stations[current_station_idx]
-	if active_station.type == EngineType.LIVE_STREAM:
-		_process_live_http_stream(delta)
-		# If live stream buffer runs dry or is connecting, seamlessly run Engine B synth as zero-drop carrier
-		if _is_stream_fallback_active:
-			_fill_procedural_synth_buffer()
-	else:
-		_fill_procedural_synth_buffer()
+	if radio_powered and _playback != null:
+		_fill_audio_buffer()
 	
-	_update_vfd_visuals(delta)
-	_deck_canvas.queue_redraw()
+	if _tuning_static_timer > 0.0:
+		_tuning_static_timer = maxf(0.0, _tuning_static_timer - delta)
+	
+	# Rotate track display title every 45 seconds for variety
+	_track_cycle_timer += delta
+	if _track_cycle_timer > 45.0:
+		_track_cycle_timer = 0.0
+		var tracks: Array = STATIONS[current_station]["tracks"]
+		current_track_idx = (current_track_idx + 1) % tracks.size()
+	
+	_update_vfd_spectrum(delta)
+	_marquee_offset += delta * 38.0
+	_vfd_control.queue_redraw()
 
-# ==============================================================================
-# CABIN ACOUSTICS & PASSIVE TELEMETRY
-# ==============================================================================
-func _update_cabin_acoustics(delta: float) -> void:
-	var tree_paused: bool = get_tree().paused if get_tree() else false
-	is_currently_muffled = tree_paused or is_handbook_muffled
-	
-	var target_cutoff: float = 520.0 if is_currently_muffled else 20500.0
-	var target_res: float = 1.25 if is_currently_muffled else 0.55
-	
-	if _lpf_effect:
-		_lpf_effect.cutoff_hz = lerpf(_lpf_effect.cutoff_hz, target_cutoff, clampf(delta * 12.0, 0.0, 1.0))
-		_lpf_effect.resonance = lerpf(_lpf_effect.resonance, target_res, clampf(delta * 12.0, 0.0, 1.0))
 
-func _poll_passive_vehicle_telemetry(delta: float) -> void:
-	# Strictly read-only inspection of vehicle properties or metadata if present in tree
-	_telemetry_scan_timer -= delta
-	if _telemetry_scan_timer <= 0.0 and not is_instance_valid(_cached_vehicle_node):
-		_telemetry_scan_timer = 2.0
-		_cached_vehicle_node = _find_player_vehicle_readonly()
-	
-	var raw_rpm: float = -1.0
-	var raw_slip: float = -1.0
-	
-	if is_instance_valid(_cached_vehicle_node):
-		if "rpm" in _cached_vehicle_node:
-			raw_rpm = float(_cached_vehicle_node.get("rpm"))
-		elif "engine_rpm" in _cached_vehicle_node:
-			raw_rpm = float(_cached_vehicle_node.get("engine_rpm"))
-		elif _cached_vehicle_node.has_meta("rpm"):
-			raw_rpm = float(_cached_vehicle_node.get_meta("rpm"))
-			
-		if "drift_slip" in _cached_vehicle_node:
-			raw_slip = float(_cached_vehicle_node.get("drift_slip"))
-		elif "tire_slip" in _cached_vehicle_node:
-			raw_slip = float(_cached_vehicle_node.get("tire_slip"))
-		elif "lateral_slip" in _cached_vehicle_node:
-			raw_slip = float(_cached_vehicle_node.get("lateral_slip"))
-	
-	if raw_rpm >= 0.0:
-		var norm_rpm: float = clampf((raw_rpm - 800.0) / 7700.0, 0.0, 1.0)
-		_telemetry_rpm_norm = lerpf(_telemetry_rpm_norm, norm_rpm, delta * 8.0)
-	else:
-		# Read-only keyboard throttle estimation when standalone
-		var throttle_pressed: bool = Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP)
-		var target_rpm: float = 0.82 if throttle_pressed else 0.18
-		_telemetry_rpm_norm = lerpf(_telemetry_rpm_norm, target_rpm, delta * 2.5)
-		
-	if raw_slip >= 0.0:
-		_telemetry_drift_slip = lerpf(_telemetry_drift_slip, clampf(raw_slip, 0.0, 1.0), delta * 10.0)
-	else:
-		var handbrake_or_steer: bool = Input.is_key_pressed(KEY_SPACE) or (
-			(Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_LEFT) or Input.is_key_pressed(KEY_RIGHT))
-			and _telemetry_rpm_norm > 0.45
-		)
-		var target_slip: float = 0.75 if handbrake_or_steer else 0.0
-		_telemetry_drift_slip = lerpf(_telemetry_drift_slip, target_slip, delta * 4.0)
-
-func _find_player_vehicle_readonly() -> Node:
-	if not get_tree():
-		return null
-	for group_name in ["player_vehicle", "vehicle", "car", "player"]:
-		var nodes := get_tree().get_nodes_in_group(group_name)
-		if not nodes.is_empty():
-			return nodes[0]
-	return null
-
-func _apply_master_volume() -> void:
-	if _bus_idx == -1:
+func _fill_audio_buffer() -> void:
+	var frames_available: int = _playback.get_frames_available()
+	if frames_available <= 0:
 		return
-	var db: float = linear_to_db(maxf(master_volume_linear, 0.0001))
-	AudioServer.set_bus_volume_db(_bus_idx, db)
-	AudioServer.set_bus_mute(_bus_idx, master_volume_linear <= 0.001)
-
-# ==============================================================================
-# STATION TUNING CONTROLLER
-# ==============================================================================
-func _tune_station(new_idx: int) -> void:
-	current_station_idx = clampi(new_idx, 0, stations.size() - 1)
-	_title_scroll_offset = 0.0
 	
-	# Reset buffers
-	_mp3_ring_buffer.clear()
-	_decoded_pcm_queue.clear()
-	_pcm_read_head = 0
-	if _stream_playback != null and _stream_player != null and not _stream_player.playing:
-		_stream_playback.clear_buffer()
-	
-	var st: RadioStation = stations[current_station_idx]
-	if st.type == EngineType.LIVE_STREAM:
-		_is_stream_fallback_active = true
-		_stream_redirect_hops = 0
-		_initiate_http_stream(st.url)
-	else:
-		_http_client.close()
-		_is_stream_fallback_active = false
-		_stream_status_text = "SYNTH LOCKED"
-
-# ==============================================================================
-# ENGINE A: LIVE HTTP ICECAST / MP3 STREAMING ENGINE
-# ==============================================================================
-func _initiate_http_stream(url: String) -> void:
-	_http_client.close()
-	_stream_retry_timer = 0.0
-	
-	var clean_url: String = url.strip_edges()
-	_stream_use_tls = clean_url.begins_with("https://")
-	var without_proto: String = clean_url.replace("https://", "").replace("http://", "")
-	
-	var slash_pos: int = without_proto.find("/")
-	var host_port: String = without_proto if slash_pos == -1 else without_proto.substr(0, slash_pos)
-	_stream_path = "/" if slash_pos == -1 else without_proto.substr(slash_pos)
-	
-	var colon_pos: int = host_port.find(":")
-	if colon_pos != -1:
-		_stream_host = host_port.substr(0, colon_pos)
-		_stream_port = host_port.substr(colon_pos + 1).to_int()
-	else:
-		_stream_host = host_port
-		_stream_port = 443 if _stream_use_tls else 80
-		
-	var tls_opts: TLSOptions = TLSOptions.client() if _stream_use_tls else null
-	var err: Error = _http_client.connect_to_host(_stream_host, _stream_port, tls_opts)
-	if err == OK:
-		_stream_status_text = "TUNING..."
-	else:
-		_stream_status_text = "NET RETRY"
-		_stream_retry_timer = 3.5
-
-func _process_live_http_stream(delta: float) -> void:
-	if _stream_retry_timer > 0.0:
-		_stream_retry_timer -= delta
-		if _stream_retry_timer <= 0.0:
-			_initiate_http_stream(stations[current_station_idx].url)
-		return
-		
-	_http_client.poll()
-	var status: HTTPClient.Status = _http_client.get_status()
-	
-	match status:
-		HTTPClient.STATUS_RESOLVING, HTTPClient.STATUS_CONNECTING:
-			_stream_status_text = "TUNING..."
-			_is_stream_fallback_active = true
-			
-		HTTPClient.STATUS_CONNECTED:
-			var headers: PackedStringArray = [
-				"User-Agent: ShiTmoZ-TougeRadio/4.3",
-				"Icy-MetaData: 0",
-				"Accept: */*",
-				"Connection: keep-alive"
-			]
-			var err: Error = _http_client.request(HTTPClient.METHOD_GET, _stream_path, headers)
-			if err != OK:
-				_schedule_stream_retry("REQ ERR")
-			else:
-				_stream_status_text = "BUFFERING"
-				
-		HTTPClient.STATUS_REQUESTING:
-			_stream_status_text = "HANDSHAKE"
-			
-		HTTPClient.STATUS_BODY:
-			var resp_code: int = _http_client.get_response_code()
-			if resp_code in [301, 302, 303, 307, 308]:
-				_handle_http_redirect()
-				return
-			elif resp_code != 200:
-				_schedule_stream_retry("HTTP %d" % resp_code)
-				return
-				
-			# Pull available chunks non-blockingly
-			for _i in range(4):
-				if _http_client.get_status() != HTTPClient.STATUS_BODY:
-					break
-				var chunk: PackedByteArray = _http_client.read_response_body_chunk()
-				if chunk.is_empty():
-					break
-				_mp3_ring_buffer.append_array(chunk)
-				
-			# Prevent unbounded memory growth
-			if _mp3_ring_buffer.size() > 262144:
-				_mp3_ring_buffer = _mp3_ring_buffer.slice(_mp3_ring_buffer.size() - 131072)
-				
-			# Decode MP3 chunk batch (~24KB per batch for crisp frame lock)
-			if _mp3_ring_buffer.size() >= 24576 and (_decoded_pcm_queue.size() - _pcm_read_head) < 32768:
-				_decode_mp3_batch_to_pcm()
-				
-			_feed_stream_generator_buffer()
-			
-		HTTPClient.STATUS_CANT_CONNECT, HTTPClient.STATUS_CANT_RESOLVE, HTTPClient.STATUS_CONNECTION_ERROR, HTTPClient.STATUS_TLS_HANDSHAKE_ERROR:
-			_schedule_stream_retry("SIGNAL LOST")
-			
-		HTTPClient.STATUS_DISCONNECTED:
-			_schedule_stream_retry("RECONNECT")
-
-func _handle_http_redirect() -> void:
-	_stream_redirect_hops += 1
-	if _stream_redirect_hops > 4:
-		_schedule_stream_retry("MAX REDIR")
-		return
-	var headers: Dictionary = _http_client.get_response_headers_as_dictionary()
-	for k in headers.keys():
-		if String(k).to_lower() == "location":
-			var new_url: String = String(headers[k])
-			_initiate_http_stream(new_url)
-			return
-	_schedule_stream_retry("REDIR ERR")
-
-func _schedule_stream_retry(reason: String) -> void:
-	_http_client.close()
-	_stream_status_text = reason + " (SYNTH)"
-	_is_stream_fallback_active = true
-	_stream_retry_timer = 4.0
-
-func _decode_mp3_batch_to_pcm() -> void:
-	# Godot 4 does not expose internal mix_audio() on AudioStreamPlayback to GDScript.
-	# When buffering live internet stream, fallback seamlessly to procedural synth engine.
-	_mp3_ring_buffer.clear()
-	return
-
-func _feed_stream_generator_buffer() -> void:
-	if _stream_playback == null:
-		return
-	var frames_avail: int = _stream_playback.get_frames_available()
-	var queued_frames: int = _decoded_pcm_queue.size() - _pcm_read_head
-	
-	if queued_frames > 0:
-		_is_stream_fallback_active = false
-		_stream_status_text = "LIVE STEREO"
-		var to_push: int = mini(frames_avail, queued_frames)
-		for i in range(to_push):
-			_stream_playback.push_frame(_decoded_pcm_queue[_pcm_read_head + i])
-		_pcm_read_head += to_push
-	else:
-		# Stream buffer underrun -> seamlessly engage Engine B procedural synth until HTTP catches up
-		_is_stream_fallback_active = true
-		if _stream_status_text == "LIVE STEREO":
-			_stream_status_text = "BUFFERING"
-
-# ==============================================================================
-# ENGINE B: ZERO-DROP PROCEDURAL TOUGE SYNTHESIZER
-# ==============================================================================
-func _fill_procedural_synth_buffer() -> void:
-	if _synth_playback == null:
-		return
-	var frames_to_fill: int = _synth_playback.get_frames_available()
-	if frames_to_fill <= 0:
-		return
-		
-	# Dynamic BPM scaled by Engine RPM (128 BPM at idle -> 166 BPM at redline)
-	var dynamic_bpm: float = lerpf(128.0, 166.0, _telemetry_rpm_norm)
-	var steps_per_sec: float = (dynamic_bpm / 60.0) * 4.0 # 16th note resolution
+	var station_data: Dictionary = STATIONS[current_station]
+	var bpm: float = station_data["bpm"]
+	# 16th note steps per second = (BPM / 60.0) * 4.0
+	var steps_per_sec: float = (bpm / 60.0) * 4.0
 	var step_inc: float = steps_per_sec / MIX_RATE
-	var inv_mix: float = 1.0 / MIX_RATE
+	var inv_mix_rate: float = 1.0 / MIX_RATE
 	
-	for _i in range(frames_to_fill):
-		var prev_step: int = int(_synth_step_accumulator)
-		_synth_step_accumulator += step_inc
-		var cur_step: int = int(_synth_step_accumulator)
+	var out_frames := PackedVector2Array()
+	out_frames.resize(frames_available)
+	
+	for i in range(frames_available):
+		_step_phase += step_inc
+		var step_index: int = int(_step_phase) % 64
+		if step_index != _current_step:
+			_current_step = step_index
+			_trigger_sequencer_step(_current_step, current_station)
 		
-		if cur_step != prev_step:
-			_synth_current_step = cur_step % 16
-			if _synth_current_step == 0:
-				_synth_bar_count += 1
-			# Trigger 4-on-the-floor punchy kick on quarter notes (0, 4, 8, 12)
-			if _synth_current_step % 4 == 0:
-				_synth_phase_kick = 0.0
-				_synth_phase_kick_env = 0.0
-				
-		var step_frac: float = fmod(_synth_step_accumulator, 1.0)
+		var frame_stereo: Vector2
+		match current_station:
+			StationID.EUROBEAT_AKINA:
+				frame_stereo = _synth_step_eurobeat(inv_mix_rate)
+			StationID.NIGHTWAVE_CITYPOP:
+				frame_stereo = _synth_step_nightwave(inv_mix_rate)
+			StationID.DRIFT_PHONK:
+				frame_stereo = _synth_step_phonk(inv_mix_rate)
+			_:
+				frame_stereo = Vector2.ZERO
 		
-		# --- VOICE 1: PUNCHY 90s EUROBEAT KICK ---
-		_synth_phase_kick_env += inv_mix * 5.5
-		var kick_env: float = clampf(1.0 - _synth_phase_kick_env, 0.0, 1.0)
-		kick_env = kick_env * kick_env
-		var kick_freq: float = 46.0 + 145.0 * pow(kick_env, 3.0)
-		_synth_phase_kick = fmod(_synth_phase_kick + kick_freq * inv_mix, 1.0)
-		var kick_sig: float = sin(_synth_phase_kick * TAU) * kick_env * 0.72
+		# Overlay FM tuning static burst if switching stations
+		if _tuning_static_timer > 0.0:
+			var noise: float = _fast_white_noise() * 0.35
+			var sweep: float = sin(float(_sample_clock) * 0.04) * 0.15
+			var static_mix: float = clampf(_tuning_static_timer / 0.18, 0.0, 1.0)
+			frame_stereo = frame_stereo.lerp(Vector2(noise + sweep, noise - sweep), static_mix * 0.85)
 		
-		# --- VOICE 2: ROLLING OCTAVE SAW BASSLINE ---
-		var bass_midi: int = BASS_SEQUENCE[_synth_current_step]
-		# Transpose up 2 semitones every 4th bar for classic Eurobeat tension
-		if (_synth_bar_count % 4) == 3:
-			bass_midi += 2
-		var bass_freq: float = 440.0 * pow(2.0, (float(bass_midi) - 69.0) / 12.0)
-		_synth_phase_bass = fmod(_synth_phase_bass + bass_freq * inv_mix, 1.0)
-		var bass_env: float = clampf(1.0 - step_frac * 0.85, 0.1, 1.0)
-		# Rich saw + square sub-oscillator
-		var bass_saw: float = (_synth_phase_bass * 2.0 - 1.0)
-		var bass_sub: float = 1.0 if _synth_phase_bass < 0.5 else -1.0
-		var bass_sig: float = (bass_saw * 0.6 + bass_sub * 0.4) * bass_env * 0.36
+		# Master stereo soft-clipper (analog tape saturation)
+		frame_stereo.x = tanh(frame_stereo.x * 1.15) * 0.88
+		frame_stereo.y = tanh(frame_stereo.y * 1.15) * 0.88
 		
-		# --- VOICE 3: DRIFT-MODULATED ARPEGGIO BRASS LEAD ---
-		var lead_midi: int = LEAD_ARPEGGIO[_synth_current_step]
-		if (_synth_bar_count % 4) == 3:
-			lead_midi += 2
-		_synth_phase_lfo = fmod(_synth_phase_lfo + (5.5 + _telemetry_drift_slip * 8.0) * inv_mix, 1.0)
-		var vibrato: float = sin(_synth_phase_lfo * TAU) * (0.003 + _telemetry_drift_slip * 0.015)
-		var lead_freq: float = (440.0 * pow(2.0, (float(lead_midi) - 69.0) / 12.0)) * (1.0 + vibrato)
-		_synth_phase_lead = fmod(_synth_phase_lead + lead_freq * inv_mix, 1.0)
-		
-		var pwm_duty: float = 0.5 + 0.32 * sin(_synth_phase_lfo * TAU * 0.5)
-		var lead_pulse: float = 1.0 if _synth_phase_lead < pwm_duty else -1.0
-		var lead_env: float = pow(1.0 - step_frac, 1.6)
-		var lead_gain: float = 0.22 + _telemetry_drift_slip * 0.18 + _telemetry_rpm_norm * 0.08
-		var lead_sig: float = lead_pulse * lead_env * lead_gain
-		
-		# --- VOICE 4: OFF-BEAT CRISP HI-HAT & SNARE ---
-		_synth_noise_seed = (_synth_noise_seed * 1664525 + 1013904223) & 0x7FFFFFFF
-		var white_noise: float = (float(_synth_noise_seed) / float(0x3FFFFFFF)) - 1.0
-		var hat_sig: float = 0.0
-		if (_synth_current_step % 4) == 2:
-			# Open off-beat hat
-			hat_sig = white_noise * pow(1.0 - step_frac, 2.2) * 0.22
-		elif (_synth_current_step % 2) == 1:
-			# Closed 16th hat
-			hat_sig = white_noise * pow(1.0 - step_frac, 6.0) * 0.10
-		if _synth_current_step == 4 or _synth_current_step == 12:
-			# Snare clap layer
-			hat_sig += white_noise * pow(1.0 - step_frac, 2.8) * 0.28
-			
-		# Stereo Panning & Soft Clipper
-		var center_mix: float = kick_sig + bass_sig
-		var stereo_spread: float = sin(float(_synth_current_step) * 0.8) * 0.35
-		var left_ch: float = tanh(center_mix + lead_sig * (1.0 - stereo_spread) + hat_sig * 0.9)
-		var right_ch: float = tanh(center_mix + lead_sig * (1.0 + stereo_spread) + hat_sig * 1.1)
-		
-		_synth_playback.push_frame(Vector2(left_ch * 0.85, right_ch * 0.85))
+		out_frames[i] = frame_stereo
+		_sample_clock += 1
+	
+	_playback.push_buffer(out_frames)
 
-# ==============================================================================
-# VFD SPECTRUM & ANIMATION UPDATER
-# ==============================================================================
-func _update_vfd_visuals(delta: float) -> void:
-	_title_scroll_offset += delta * 38.0
-	_cassette_reel_angle = fmod(_cassette_reel_angle + delta * (2.2 + _telemetry_rpm_norm * 3.5), TAU)
+
+## ============================================================================
+## SEQUENCER STEP TRIGGERING (16-Step * 4 Bars = 64 Steps)
+## ============================================================================
+
+func _trigger_sequencer_step(step: int, station: int) -> void:
+	var step_16: int = step % 16
+	var bar_idx: int = (step / 16) % 4
 	
-	for k in _key_flash_timers.keys():
-		if _key_flash_timers[k] > 0.0:
-			_key_flash_timers[k] = maxf(0.0, _key_flash_timers[k] - delta)
+	match station:
+		StationID.EUROBEAT_AKINA:
+			# 4-on-the-floor driving kick (Steps 0, 4, 8, 12) + turnaround fill
+			if step_16 % 4 == 0 or (bar_idx == 3 and step_16 == 14):
+				_kick_env = 1.0
+				_kick_pitch_env = 1.0
+				_kick_phase = 0.0
 			
-	# 8-Band logarithmic frequency ranges (Hz)
-	const FREQ_BANDS: Array[Vector2] = [
-		Vector2(30.0, 85.0),
-		Vector2(85.0, 180.0),
-		Vector2(180.0, 380.0),
-		Vector2(380.0, 800.0),
-		Vector2(800.0, 1700.0),
-		Vector2(1700.0, 3600.0),
-		Vector2(3600.0, 7500.0),
-		Vector2(7500.0, 15000.0)
-	]
+			# Snappy 90s Eurobeat snare on 4 and 12 + end-of-phrase roll
+			if step_16 == 4 or step_16 == 12 or (bar_idx == 3 and step_16 >= 13):
+				_snare_env = 1.0
+				_snare_tone_phase = 0.0
+			
+			# Off-beat open hi-hat (2, 6, 10, 14), closed hi-hat on others
+			_hat_env = 0.85 if (step_16 % 4 == 2) else 0.42
+			_hat_decay_rate = 11.0 if (step_16 % 4 == 2) else 34.0
+			
+			# Rolling 16th-note Octave Jumping Bassline
+			var root_midi: int = EUROBEAT_BASS_ROOTS[step]
+			var octave_jump: int = 12 if (step_16 % 2 == 1) else 0
+			_bass_freq = _midi_to_hz(float(root_midi + octave_jump))
+			_bass_env = 1.0
+			
+			# Iconic Eurobeat Brass Lead
+			var lead_note: int = EUROBEAT_LEAD_NOTES[step]
+			if lead_note > 0:
+				_lead_target_freq = _midi_to_hz(float(lead_note))
+				if _lead_env < 0.2:
+					_lead_freq = _lead_target_freq
+				_lead_env = 1.0
+			
+		StationID.NIGHTWAVE_CITYPOP:
+			# Punchy 80s LinnDrum Kick on 0, 6, 8
+			if step_16 == 0 or step_16 == 6 or step_16 == 8:
+				_kick_env = 1.0
+				_kick_pitch_env = 1.0
+				_kick_phase = 0.0
+			
+			# Gated Reverb 80s Snare on 4 and 12
+			if step_16 == 4 or step_16 == 12:
+				_snare_env = 1.0
+				_snare_tone_phase = 0.0
+			
+			# Crisp 16th shaker/hats
+			_hat_env = 0.65 if (step_16 % 4 == 2) else 0.30
+			_hat_decay_rate = 18.0 if (step_16 % 4 == 2) else 42.0
+			
+			# Update Lush 5-Voice Juno-106 Pad Chord every bar
+			var chord: Array = NIGHTWAVE_CHORDS[bar_idx]
+			for c_idx in range(5):
+				_pad_freqs[c_idx] = _midi_to_hz(float(chord[c_idx]))
+			
+			# Syncopated Slap Synth Bass
+			var nw_bass: int = NIGHTWAVE_BASS_NOTES[step]
+			if nw_bass > 0:
+				_bass_freq = _midi_to_hz(float(nw_bass))
+				_bass_env = 1.0
+			
+			# Dreamy Pluck Arpeggio
+			var arp_note: int = NIGHTWAVE_ARP_NOTES[step]
+			if arp_note > 0:
+				_lead_target_freq = _midi_to_hz(float(arp_note))
+				_lead_freq = _lead_target_freq
+				_lead_env = 0.85
+				
+		StationID.DRIFT_PHONK:
+			# Hard-hitting Memphis Phonk Kick pattern
+			if step_16 == 0 or step_16 == 3 or step_16 == 6 or step_16 == 10 or (bar_idx == 3 and step_16 == 14):
+				_kick_env = 1.0
+				_kick_pitch_env = 1.0
+				_kick_phase = 0.0
+			
+			# Trap/Phonk Snare on 4 and 12
+			if step_16 == 4 or step_16 == 12:
+				_snare_env = 1.0
+				_snare_tone_phase = 0.0
+			
+			# Fast trap hi-hat rolls on steps 11, 13, 14, 15
+			_hat_env = 0.75 if (step_16 % 2 == 0 or step_16 >= 13) else 0.45
+			_hat_decay_rate = 38.0
+			
+			# Distorted 808 Sub Bass
+			var sub_note: int = PHONK_808_NOTES[step]
+			if sub_note > 0 and (step_16 == 0 or step_16 == 3 or step_16 == 6 or step_16 == 8 or step_16 == 11 or step_16 == 14):
+				_bass_freq = _midi_to_hz(float(sub_note))
+				_bass_env = 1.0
+			
+			# Iconic Roland TR-808 Cowbell Melody
+			var cb_note: int = PHONK_COWBELL_NOTES[step]
+			if cb_note > 0:
+				_lead_target_freq = _midi_to_hz(float(cb_note))
+				_lead_freq = _lead_target_freq
+				_lead_env = 1.0
+
+
+## ============================================================================
+## STATION DSP SYNTHESIZER ENGINES
+## ============================================================================
+
+# --- Station 0: 155 BPM High-Octane Eurobeat ---
+func _synth_step_eurobeat(dt: float) -> Vector2:
+	# 1. Kick Drum (Punchy 909-style pitch drop)
+	var kick_sample: float = 0.0
+	if _kick_env > 0.001:
+		var k_freq: float = 48.0 + (_kick_pitch_env * _kick_pitch_env) * 145.0
+		_kick_phase = fposmod(_kick_phase + k_freq * dt, 1.0)
+		kick_sample = sin(_kick_phase * TAU) * _kick_env * 0.95
+		_kick_env = maxf(0.0, _kick_env - dt * 6.8)
+		_kick_pitch_env = maxf(0.0, _kick_pitch_env - dt * 28.0)
 	
-	for i in range(8):
+	# 2. Snare Drum (Body + Crispy White Noise)
+	var snare_sample: float = 0.0
+	if _snare_env > 0.001:
+		_snare_tone_phase = fposmod(_snare_tone_phase + 185.0 * dt, 1.0)
+		var body: float = sin(_snare_tone_phase * TAU) * _snare_env * 0.45
+		var noise: float = _fast_white_noise() * (_snare_env * _snare_env) * 0.70
+		snare_sample = body + noise
+		_snare_env = maxf(0.0, _snare_env - dt * 8.5)
+	
+	# 3. Hi-Hats (High-passed metallic noise)
+	var hat_sample: float = 0.0
+	if _hat_env > 0.001:
+		var raw_noise: float = _fast_white_noise()
+		hat_sample = (raw_noise - _bass_lp_state * 0.2) * _hat_env * 0.28
+		_hat_env = maxf(0.0, _hat_env - dt * _hat_decay_rate)
+	
+	# 4. Rolling Octave Eurobeat Bass (Dual Detuned Saw + Lowpass Filter)
+	var bass_sample: float = 0.0
+	if _bass_env > 0.001:
+		_bass_phase1 = fposmod(_bass_phase1 + _bass_freq * dt, 1.0)
+		_bass_phase2 = fposmod(_bass_phase2 + (_bass_freq * 1.006) * dt, 1.0)
+		var saw1: float = (_bass_phase1 * 2.0) - 1.0
+		var saw2: float = (_bass_phase2 * 2.0) - 1.0
+		var raw_bass: float = (saw1 + saw2) * 0.5
+		# Resonant envelope filter approximation
+		var cutoff: float = clampf(0.14 + _bass_env * 0.45, 0.05, 0.75)
+		_bass_lp_state += cutoff * (raw_bass - _bass_lp_state)
+		bass_sample = tanh(_bass_lp_state * 1.8) * _bass_env * 0.52
+		_bass_env = maxf(0.0, _bass_env - dt * 9.5)
+	
+	# 5. Unison 5-Voice Detuned Supersaw Brass Lead (Stereo Spread)
+	var lead_l: float = 0.0
+	var lead_r: float = 0.0
+	if _lead_env > 0.001:
+		# Smooth portamento glide
+		_lead_freq = lerpf(_lead_freq, _lead_target_freq, dt * 45.0)
+		var detunes: Array[float] = [0.988, 0.995, 1.0, 1.005, 1.012]
+		var pans_l: Array[float] = [0.9, 0.7, 0.5, 0.3, 0.1]
+		for v in range(5):
+			var p: float = fposmod(_lead_phases[v] + (_lead_freq * detunes[v]) * dt, 1.0)
+			_lead_phases[v] = p
+			var osc: float = (p * 2.0) - 1.0
+			lead_l += osc * pans_l[v]
+			lead_r += osc * (1.0 - pans_l[v])
+		
+		var env_shape: float = _lead_env * 0.18
+		lead_l *= env_shape
+		lead_r *= env_shape
+		_lead_env = maxf(0.0, _lead_env - dt * 3.8)
+	
+	# Stereo Echo on Lead
+	var echoed: Vector2 = _process_stereo_delay(lead_l, lead_r, 0.32)
+	var center_mono: float = kick_sample + snare_sample + bass_sample
+	return Vector2(
+		center_mono + echoed.x + hat_sample * 0.8,
+		center_mono + echoed.y + hat_sample * 1.2
+	)
+
+
+# --- Station 1: 110 BPM Nightwave / 80s City Pop ---
+func _synth_step_nightwave(dt: float) -> Vector2:
+	# 1. Warm 80s Kick
+	var kick_sample: float = 0.0
+	if _kick_env > 0.001:
+		var k_freq: float = 44.0 + (_kick_pitch_env * _kick_pitch_env) * 110.0
+		_kick_phase = fposmod(_kick_phase + k_freq * dt, 1.0)
+		kick_sample = sin(_kick_phase * TAU) * _kick_env * 0.88
+		_kick_env = maxf(0.0, _kick_env - dt * 5.5)
+		_kick_pitch_env = maxf(0.0, _kick_pitch_env - dt * 24.0)
+	
+	# 2. Gated Reverb 80s Snare
+	var snare_sample: float = 0.0
+	if _snare_env > 0.001:
+		_snare_tone_phase = fposmod(_snare_tone_phase + 165.0 * dt, 1.0)
+		var body: float = sin(_snare_tone_phase * TAU) * _snare_env * 0.4
+		# Gated envelope stays loud then drops sharply
+		var gate_env: float = 1.0 if _snare_env > 0.35 else (_snare_env / 0.35)
+		var noise: float = _fast_white_noise() * gate_env * 0.45
+		snare_sample = body + noise
+		_snare_env = maxf(0.0, _snare_env - dt * 4.2)
+	
+	# 3. Crisp Hats
+	var hat_sample: float = 0.0
+	if _hat_env > 0.001:
+		hat_sample = _fast_white_noise() * _hat_env * 0.20
+		_hat_env = maxf(0.0, _hat_env - dt * _hat_decay_rate)
+	
+	# 4. Lush 5-Voice Chorus Juno Pad (Sidechained by Kick)
+	var pad_l: float = 0.0
+	var pad_r: float = 0.0
+	var sidechain: float = 1.0 - (_kick_env * 0.65)
+	var lfo: float = sin(float(_sample_clock) * dt * 2.5) * 0.003
+	for c in range(5):
+		var freq: float = _pad_freqs[c] * (1.0 + lfo * float(c - 2))
+		var p: float = fposmod(_pad_phases[c] + freq * dt, 1.0)
+		_pad_phases[c] = p
+		# Warm triangle + pulse blend
+		var tri: float = 1.0 - 4.0 * absf(p - 0.5)
+		var pulse: float = 1.0 if p < 0.35 else -1.0
+		var voice: float = (tri * 0.7 + pulse * 0.3) * 0.075 * sidechain
+		if c % 2 == 0:
+			pad_l += voice * 1.2
+			pad_r += voice * 0.6
+		else:
+			pad_l += voice * 0.6
+			pad_r += voice * 1.2
+	
+	# 5. FM Slap Synth Bass
+	var bass_sample: float = 0.0
+	if _bass_env > 0.001:
+		_bass_phase1 = fposmod(_bass_phase1 + _bass_freq * dt, 1.0)
+		_bass_phase2 = fposmod(_bass_phase2 + (_bass_freq * 2.0) * dt, 1.0)
+		var mod_index: float = _bass_env * _bass_env * 2.4
+		var fm_mod: float = sin(_bass_phase2 * TAU) * mod_index
+		bass_sample = sin(_bass_phase1 * TAU + fm_mod) * _bass_env * 0.52
+		_bass_env = maxf(0.0, _bass_env - dt * 7.5)
+	
+	# 6. Crystal Bell Arpeggio
+	var arp_l: float = 0.0
+	var arp_r: float = 0.0
+	if _lead_env > 0.001:
+		var p0: float = fposmod(_lead_phases[0] + _lead_freq * dt, 1.0)
+		var p1: float = fposmod(_lead_phases[1] + (_lead_freq * 3.0) * dt, 1.0)
+		_lead_phases[0] = p0
+		_lead_phases[1] = p1
+		var bell: float = sin(p0 * TAU + sin(p1 * TAU) * _lead_env * 1.2) * _lead_env * 0.20
+		arp_l = bell * 0.7
+		arp_r = bell * 1.0
+		_lead_env = maxf(0.0, _lead_env - dt * 6.5)
+	
+	var echoed_arp: Vector2 = _process_stereo_delay(arp_l + pad_l, arp_r + pad_r, 0.42)
+	var mono_core: float = kick_sample + snare_sample + bass_sample
+	return Vector2(
+		mono_core + echoed_arp.x + hat_sample * 0.9,
+		mono_core + echoed_arp.y + hat_sample * 0.7
+	)
+
+
+# --- Station 2: 130 BPM Drift Phonk (808 Cowbell & Distorted Sub) ---
+func _synth_step_phonk(dt: float) -> Vector2:
+	# 1. Hard-Clipping Phonk Kick
+	var kick_sample: float = 0.0
+	if _kick_env > 0.001:
+		var k_freq: float = 52.0 + (_kick_pitch_env * _kick_pitch_env) * 170.0
+		_kick_phase = fposmod(_kick_phase + k_freq * dt, 1.0)
+		kick_sample = tanh(sin(_kick_phase * TAU) * 2.2) * _kick_env * 0.92
+		_kick_env = maxf(0.0, _kick_env - dt * 7.5)
+		_kick_pitch_env = maxf(0.0, _kick_pitch_env - dt * 32.0)
+	
+	# 2. Crispy Memphis Snare / Clap
+	var snare_sample: float = 0.0
+	if _snare_env > 0.001:
+		_snare_tone_phase = fposmod(_snare_tone_phase + 210.0 * dt, 1.0)
+		var body: float = sin(_snare_tone_phase * TAU) * _snare_env * 0.5
+		var noise: float = _fast_white_noise() * _snare_env * 0.75
+		snare_sample = tanh((body + noise) * 1.6) * 0.75
+		_snare_env = maxf(0.0, _snare_env - dt * 9.0)
+	
+	# 3. Trap Metallic Hi-Hat
+	var hat_sample: float = 0.0
+	if _hat_env > 0.001:
+		hat_sample = _fast_white_noise() * _hat_env * 0.26
+		_hat_env = maxf(0.0, _hat_env - dt * _hat_decay_rate)
+	
+	# 4. Saturated 808 Sub-Bass (With Upper Harmonics for Small Speakers)
+	var bass_sample: float = 0.0
+	if _bass_env > 0.001:
+		_bass_phase1 = fposmod(_bass_phase1 + _bass_freq * dt, 1.0)
+		var sub_raw: float = sin(_bass_phase1 * TAU) + sin(_bass_phase1 * TAU * 2.0) * 0.35
+		# Heavy diode-style saturation
+		var sidechain: float = 1.0 - (_kick_env * 0.5)
+		bass_sample = tanh(sub_raw * 2.6) * _bass_env * sidechain * 0.62
+		_bass_env = maxf(0.0, _bass_env - dt * 3.2)
+	
+	# 5. Authentic Roland TR-808 Dual-Oscillator Bandpass Cowbell
+	var cowbell_l: float = 0.0
+	var cowbell_r: float = 0.0
+	if _lead_env > 0.001:
+		# Classic 808 Cowbell uses two square waves at ratio 1.0 and 1.48148 (540Hz & 800Hz)
+		var f1: float = _lead_freq
+		var f2: float = _lead_freq * 1.48148
+		var p0: float = fposmod(_lead_phases[0] + f1 * dt, 1.0)
+		var p1: float = fposmod(_lead_phases[1] + f2 * dt, 1.0)
+		_lead_phases[0] = p0
+		_lead_phases[1] = p1
+		var sq1: float = 1.0 if p0 < 0.5 else -1.0
+		var sq2: float = 1.0 if p1 < 0.5 else -1.0
+		var cb_raw: float = (sq1 + sq2) * 0.5
+		var cb_sat: float = tanh(cb_raw * 1.8) * (_lead_env * _lead_env) * 0.34
+		cowbell_l = cb_sat * 0.95
+		cowbell_r = cb_sat * 0.80
+		_lead_env = maxf(0.0, _lead_env - dt * 5.8)
+	
+	var echoed_cb: Vector2 = _process_stereo_delay(cowbell_l, cowbell_r, 0.25)
+	var mono_core: float = kick_sample + snare_sample + bass_sample
+	return Vector2(
+		mono_core + echoed_cb.x + hat_sample * 1.1,
+		mono_core + echoed_cb.y + hat_sample * 0.85
+	)
+
+
+# --- Utility DSP Helpers ---
+func _process_stereo_delay(in_l: float, in_r: float, wet: float) -> Vector2:
+	var read_l: float = _delay_buf_l[_delay_write_pos]
+	var read_r: float = _delay_buf_r[_delay_write_pos]
+	
+	# Ping-pong cross-feedback
+	_delay_buf_l[_delay_write_pos] = in_l + read_r * 0.36
+	_delay_buf_r[_delay_write_pos] = in_r + read_l * 0.36
+	_delay_write_pos = (_delay_write_pos + 1) % _delay_samples
+	
+	return Vector2(in_l + read_l * wet, in_r + read_r * wet)
+
+
+func _fast_white_noise() -> float:
+	# Deterministic Xorshift PRNG for zero-overhead audio thread safety
+	_lfsr_seed ^= (_lfsr_seed << 13) & 0xFFFFFFFF
+	_lfsr_seed ^= (_lfsr_seed >> 17) & 0xFFFFFFFF
+	_lfsr_seed ^= (_lfsr_seed << 5) & 0xFFFFFFFF
+	return (float(_lfsr_seed & 0xFFFF) / 32768.0) - 1.0
+
+
+## ============================================================================
+## REAL-TIME 12-BAND VFD SPECTRUM ANALYZER
+## ============================================================================
+
+const FREQ_RANGES: Array[Vector2] = [
+	Vector2(20.0, 60.0),     # Band 0: Sub Kick / 808
+	Vector2(60.0, 110.0),    # Band 1: Kick Thump
+	Vector2(110.0, 180.0),   # Band 2: Bass Fundamental
+	Vector2(180.0, 300.0),   # Band 3: Snare Body / Warmth
+	Vector2(300.0, 500.0),   # Band 4: Low Mids
+	Vector2(500.0, 800.0),   # Band 5: Cowbell / Lead Root
+	Vector2(800.0, 1300.0),  # Band 6: Supersaw Center
+	Vector2(1300.0, 2200.0), # Band 7: Upper Mids / Bite
+	Vector2(2200.0, 3600.0), # Band 8: Presence
+	Vector2(3600.0, 6000.0), # Band 9: Snare Wire / Synth Fizz
+	Vector2(6000.0, 10000.0),# Band 10: Hi-Hat Sizzle
+	Vector2(10000.0, 16000.0)# Band 11: Air
+]
+
+func _update_vfd_spectrum(delta: float) -> void:
+	var vol_scale: float = db_to_linear(master_volume_db)
+	
+	for b in range(NUM_VFD_BANDS):
 		var target_energy: float = 0.0
-		if _spectrum_instance != null and master_volume_linear > 0.001:
-			var mag: float = _spectrum_instance.get_magnitude_for_frequency_range(FREQ_BANDS[i].x, FREQ_BANDS[i].y).length()
-			target_energy = clampf((linear_to_db(mag + 0.0001) + 52.0) / 46.0, 0.0, 1.0)
-			
-		# Fallback synthetic reactivity if audio server reports near-zero
-		if target_energy < 0.05 and master_volume_linear > 0.01:
-			var beat_pulse: float = abs(sin(_synth_step_accumulator * PI * 0.5 + float(i) * 0.6))
-			target_energy = clampf(beat_pulse * (0.35 + _telemetry_rpm_norm * 0.45) * master_volume_linear, 0.05, 0.95)
-			
-		if target_energy > _fft_peaks[i]:
-			_fft_peaks[i] = lerpf(_fft_peaks[i], target_energy, clampf(delta * 26.0, 0.0, 1.0))
-		else:
-			_fft_peaks[i] = lerpf(_fft_peaks[i], target_energy, clampf(delta * 9.5, 0.0, 1.0))
-			
-		if _fft_peaks[i] >= _fft_holds[i]:
-			_fft_holds[i] = _fft_peaks[i]
-		else:
-			_fft_holds[i] = maxf(0.0, _fft_holds[i] - delta * 0.42)
-
-# ==============================================================================
-# KENWOOD KRC-990SP VECTOR VFD RENDERER
-# ==============================================================================
-func _on_deck_draw() -> void:
-	var font: Font = ThemeDB.fallback_font
-	var c: Control = _deck_canvas
-	
-	# 1. Outer DIN Chassis & Brushed Faceplate Bezel
-	c.draw_rect(Rect2(0, 0, DECK_WIDTH, DECK_HEIGHT), COLOR_CHASSIS_BG, true)
-	c.draw_rect(Rect2(2, 2, DECK_WIDTH - 4, DECK_HEIGHT - 4), COLOR_CHASSIS_TRIM, false, 2.0)
-	c.draw_rect(Rect2(5, 5, DECK_WIDTH - 10, DECK_HEIGHT - 10), Color(0.04, 0.04, 0.05, 1.0), false, 1.0)
-	
-	# Left Side Pull-Tab Indicator (Always visible even when tucked)
-	c.draw_rect(Rect2(4, 10, 20, DECK_HEIGHT - 20), Color(0.11, 0.12, 0.14, 1.0), true)
-	c.draw_string(font, Vector2(9, 45), "M", HORIZONTAL_ALIGNMENT_CENTER, -1, 11, COLOR_VFD_AMBER if _key_flash_timers["hide"] > 0.0 else COLOR_VFD_CYAN)
-	c.draw_line(Vector2(14, 54), Vector2(14, 96), COLOR_VFD_AMBER_DIM, 2.0)
-	var arrow_txt: String = ">" if is_drawer_open else "<"
-	c.draw_string(font, Vector2(9, 112), arrow_txt, HORIZONTAL_ALIGNMENT_CENTER, -1, 11, COLOR_VFD_AMBER)
-	
-	# 2. Recessed VFD Glass Lens
-	var vfd_rect := Rect2(28, 10, DECK_WIDTH - 38, 86)
-	c.draw_rect(vfd_rect, COLOR_VFD_GLASS, true)
-	c.draw_rect(vfd_rect, Color(0.22, 0.25, 0.28, 0.8), false, 1.5)
-	
-	# Subtle VFD Phosphor Grid Scanlines
-	for y_line in range(int(vfd_rect.position.y) + 2, int(vfd_rect.end.y), 3):
-		c.draw_line(Vector2(vfd_rect.position.x + 2, y_line), Vector2(vfd_rect.end.x - 2, y_line), Color(0.0, 0.14, 0.16, 0.22), 1.0)
 		
-	var st: RadioStation = stations[current_station_idx]
-	
-	# 3. Top Branding & Mode Badges inside VFD
-	c.draw_string(font, Vector2(36, 24), "KENWOOD", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.85, 0.88, 0.92, 0.9))
-	c.draw_string(font, Vector2(102, 23), "KRC-990SP // DSP", HORIZONTAL_ALIGNMENT_LEFT, -1, 9, COLOR_VFD_AMBER)
-	
-	# Status Badges (ST, LOUD, CABIN LPF, MODE)
-	_draw_vfd_badge(c, font, Rect2(204, 13, 28, 12), "ST", true, COLOR_VFD_CYAN)
-	var is_synth_active: bool = (st.type == EngineType.PROCEDURAL_SYNTH) or _is_stream_fallback_active
-	_draw_vfd_badge(c, font, Rect2(236, 13, 46, 12), "SYNTH" if is_synth_active else "NET-FM", true, COLOR_VFD_AMBER if is_synth_active else COLOR_VFD_CYAN)
-	_draw_vfd_badge(c, font, Rect2(286, 13, 42, 12), "MUFFLE", is_currently_muffled, COLOR_VFD_RED)
-	_draw_vfd_badge(c, font, Rect2(332, 13, 38, 12), "DRIFT", _telemetry_drift_slip > 0.25, COLOR_VFD_AMBER)
-	
-	# 4. Station Frequency Readout & Motorized Cassette Window
-	c.draw_string(font, Vector2(36, 48), st.freq, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, COLOR_VFD_CYAN)
-	
-	var status_label: String = _stream_status_text if st.type == EngineType.LIVE_STREAM else ("RPM:%d%%" % int(_telemetry_rpm_norm * 100.0))
-	c.draw_string(font, Vector2(132, 46), status_label, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, COLOR_VFD_AMBER)
-	
-	# Mini Motorized Cassette Mechanism Graphic
-	_draw_cassette_deck_mechanism(c, Vector2(178, 38))
-	
-	# 5. Scrolling Dot-Matrix Station Title Marquee
-	var marquee_rect := Rect2(36, 55, 174, 18)
-	c.draw_rect(marquee_rect, Color(0.01, 0.02, 0.03, 0.9), true)
-	c.draw_rect(marquee_rect, COLOR_VFD_CYAN_DIM, false, 1.0)
-	
-	var full_marquee_str: String = "CH%d: %s   ***   " % [current_station_idx + 1, st.title]
-	var char_count: int = full_marquee_str.length()
-	var scroll_idx: int = int(_title_scroll_offset * 0.22) % maxi(char_count, 1)
-	var doubled_str: String = full_marquee_str + full_marquee_str
-	var visible_slice: String = doubled_str.substr(scroll_idx, 23)
-	c.draw_string(font, Vector2(40, 68), visible_slice, HORIZONTAL_ALIGNMENT_LEFT, 166, 11, COLOR_VFD_AMBER)
-	
-	# 6. Volume Matrix Bar (Bottom Left of VFD)
-	c.draw_string(font, Vector2(36, 88), "VOL", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, COLOR_VFD_CYAN)
-	var vol_segments: int = 14
-	var active_vol_segs: int = roundi(master_volume_linear * float(vol_segments))
-	for v_i in range(vol_segments):
-		var seg_rect := Rect2(64 + v_i * 8, 79, 6, 9)
-		var seg_col: Color = COLOR_VFD_CYAN_DIM
-		if v_i < active_vol_segs:
-			seg_col = COLOR_VFD_RED if v_i >= 11 else (COLOR_VFD_AMBER if v_i >= 8 else COLOR_VFD_CYAN)
-		c.draw_rect(seg_rect, seg_col, true)
-	c.draw_string(font, Vector2(180, 88), "%02d" % int(round(master_volume_linear * 30.0)), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, COLOR_VFD_AMBER)
-	
-	# 7. 8-Band Segmented VFD Spectrum Analyzer (Right side of VFD)
-	var spec_origin := Vector2(222, 31)
-	var bar_w: float = 15.0
-	var bar_gap: float = 4.0
-	var num_segs: int = 10
-	var seg_h: float = 3.5
-	var seg_gap: float = 1.5
-	
-	for b in range(8):
-		var bx: float = spec_origin.x + b * (bar_w + bar_gap)
-		var active_segs: int = roundi(_fft_peaks[b] * float(num_segs))
-		var hold_seg: int = clampi(roundi(_fft_holds[b] * float(num_segs)) - 1, -1, num_segs - 1)
-		
-		for s in range(num_segs):
-			# Draw bottom-up
-			var sy: float = spec_origin.y + (num_segs - 1 - s) * (seg_h + seg_gap)
-			var s_rect := Rect2(bx, sy, bar_w, seg_h)
+		if radio_powered:
+			# Primary source: Real FFT Spectrum Analyzer on JDM_Radio_Bus
+			if _spectrum_analyzer != null:
+				var range_hz: Vector2 = FREQ_RANGES[b]
+				var mag: Vector2 = _spectrum_analyzer.get_magnitude_for_frequency_range(
+					range_hz.x, range_hz.y, AudioEffectSpectrumAnalyzerInstance.MAGNITUDE_MAX
+				)
+				var raw_amp: float = (mag.x + mag.y) * 0.5
+				# Convert linear FFT amplitude to perceptual dB range (-52dB to -6dB)
+				var db_val: float = linear_to_db(maxf(raw_amp, 0.0001))
+				target_energy = clampf(remap(db_val, -52.0, -6.0, 0.0, 1.0), 0.0, 1.0)
 			
-			if s < active_segs:
-				var lit_col: Color = COLOR_VFD_CYAN
-				if s >= 8:
-					lit_col = COLOR_VFD_RED
-				elif s >= 6:
-					lit_col = COLOR_VFD_AMBER
-				c.draw_rect(s_rect, lit_col, true)
-			elif s == hold_seg and hold_seg > 0:
-				c.draw_rect(s_rect, COLOR_VFD_AMBER, true)
+			# Secondary DSP envelope reinforcement guarantees ultra-snappy visual sync
+			var env_boost: float = 0.0
+			match b:
+				0, 1:
+					env_boost = _kick_env * 0.85 + _bass_env * 0.45
+				2, 3:
+					env_boost = _bass_env * 0.80 + _snare_env * 0.35
+				4, 5, 6, 7:
+					env_boost = _lead_env * 0.78 + _snare_env * 0.40
+				8, 9, 10, 11:
+					env_boost = _hat_env * 0.75 + _snare_env * 0.55 + _lead_env * 0.30
+			
+			target_energy = clampf(maxf(target_energy, env_boost * vol_scale), 0.0, 1.0)
+		
+		# Smooth attack, classic VFD phosphor decay
+		if target_energy > _vfd_bands[b]:
+			_vfd_bands[b] = lerpf(_vfd_bands[b], target_energy, minf(1.0, delta * 36.0))
+		else:
+			_vfd_bands[b] = maxf(0.0, _vfd_bands[b] - delta * 2.4)
+		
+		# Floating peak-hold cap per band
+		if _vfd_bands[b] >= _vfd_peaks[b]:
+			_vfd_peaks[b] = _vfd_bands[b]
+			_vfd_peak_hold_timers[b] = 0.32
+		else:
+			if _vfd_peak_hold_timers[b] > 0.0:
+				_vfd_peak_hold_timers[b] -= delta
 			else:
-				c.draw_rect(s_rect, COLOR_VFD_CYAN_DIM, true)
-				
-	# Frequency labels under spectrum bars
-	const BAND_LABELS: Array[String] = ["60", "150", "350", "700", "1K", "3K", "6K", "12K"]
-	for b in range(8):
-		var bx: float = spec_origin.x + b * (bar_w + bar_gap)
-		c.draw_string(font, Vector2(bx, 90), BAND_LABELS[b], HORIZONTAL_ALIGNMENT_LEFT, -1, 7, COLOR_VFD_AMBER)
+				_vfd_peaks[b] = maxf(0.0, _vfd_peaks[b] - delta * 0.95)
+
+
+## ============================================================================
+## RETRO KENWOOD / PIONEER VFD FACEPLATE UI (Top-Right Corner)
+## ============================================================================
+
+func _setup_vfd_ui() -> void:
+	_ui_canvas = CanvasLayer.new()
+	_ui_canvas.name = "JDMRadioHUDLayer"
+	_ui_canvas.layer = 95
+	add_child(_ui_canvas)
+	
+	_vfd_control = JDMVFDDisplayControl.new(self)
+	_vfd_control.name = "KenwoodVFDFaceplate"
+	_vfd_control.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_vfd_control.offset_left = -356.0
+	_vfd_control.offset_top = 16.0
+	_vfd_control.offset_right = -16.0
+	_vfd_control.offset_bottom = 164.0
+	_vfd_control.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ui_canvas.add_child(_vfd_control)
+
+
+## Inner Class for Zero-Dependency Custom VFD Drawing
+class JDMVFDDisplayControl extends Control:
+	var radio: JDMRadioAudioSystem
+	
+	func _init(p_radio: JDMRadioAudioSystem) -> void:
+		radio = p_radio
+	
+	func _draw() -> void:
+		if radio == null:
+			return
 		
-	# 8. Bottom Tactile Hardware Key Row
-	var btn_y: float = 101.0
-	_draw_hardware_button(c, font, Rect2(28, btn_y, 66, 20), "[M] DRAWER", _key_flash_timers["hide"] > 0.0)
-	_draw_hardware_button(c, font, Rect2(100, btn_y, 68, 20), "[ [ ] SEEK-", _key_flash_timers["prev"] > 0.0)
-	_draw_hardware_button(c, font, Rect2(174, btn_y, 68, 20), "[ ] ] SEEK+", _key_flash_timers["next"] > 0.0)
-	_draw_hardware_button(c, font, Rect2(248, btn_y, 62, 20), "[-] VOL-", _key_flash_timers["v_dn"] > 0.0)
-	_draw_hardware_button(c, font, Rect2(316, btn_y, 62, 20), "[=] VOL+", _key_flash_timers["v_up"] > 0.0)
-
-func _draw_vfd_badge(c: Control, font: Font, rect: Rect2, text: String, active: bool, active_col: Color) -> void:
-	var bg_col: Color = Color(active_col.r * 0.22, active_col.g * 0.22, active_col.b * 0.22, 0.85) if active else COLOR_VFD_AMBER_DIM
-	var border_col: Color = active_col if active else COLOR_VFD_CYAN_DIM
-	var txt_col: Color = active_col if active else Color(0.2, 0.32, 0.35, 0.5)
-	c.draw_rect(rect, bg_col, true)
-	c.draw_rect(rect, border_col, false, 1.0)
-	c.draw_string(font, Vector2(rect.position.x + 3, rect.position.y + 9), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 8, txt_col)
-
-func _draw_cassette_deck_mechanism(c: Control, center: Vector2) -> void:
-	# Draws animated dual-spindle cassette window inside VFD
-	var box := Rect2(center.x - 18, center.y - 8, 36, 16)
-	c.draw_rect(box, Color(0.01, 0.03, 0.04, 1.0), true)
-	c.draw_rect(box, COLOR_VFD_AMBER_DIM, false, 1.0)
-	
-	for offset_x in [-9.0, 9.0]:
-		var reel_pos := Vector2(center.x + offset_x, center.y)
-		c.draw_arc(reel_pos, 4.5, 0.0, TAU, 12, COLOR_VFD_CYAN, 1.2)
-		for spoke in range(3):
-			var ang: float = _cassette_reel_angle + float(spoke) * (TAU / 3.0)
-			var p2: Vector2 = reel_pos + Vector2(cos(ang), sin(ang)) * 4.5
-			c.draw_line(reel_pos, p2, COLOR_VFD_AMBER, 1.2)
-
-func _draw_hardware_button(c: Control, font: Font, rect: Rect2, label: String, is_pressed: bool) -> void:
-	var bg: Color = Color(0.24, 0.16, 0.05, 1.0) if is_pressed else Color(0.12, 0.13, 0.15, 1.0)
-	var rim: Color = COLOR_VFD_AMBER if is_pressed else Color(0.26, 0.28, 0.32, 1.0)
-	var txt_col: Color = COLOR_VFD_AMBER if is_pressed else Color(0.78, 0.82, 0.86, 0.95)
-	
-	c.draw_rect(rect, bg, true)
-	c.draw_rect(rect, rim, false, 1.0)
-	# Subtle amber LED backlight strip on button top
-	c.draw_line(Vector2(rect.position.x + 3, rect.position.y + 2), Vector2(rect.end.x - 3, rect.position.y + 2), COLOR_VFD_AMBER if is_pressed else COLOR_VFD_AMBER_DIM, 1.5)
-	c.draw_string(font, Vector2(rect.position.x + 5, rect.position.y + 14), label, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 6, 9, txt_col)
+		var rect := Rect2(Vector2.ZERO, size)
+		var st_data: Dictionary = JDMRadioAudioSystem.STATIONS[radio.current_station]
+		var powered: bool = radio.radio_powered
+		var accent_col: Color = st_data["accent_color"] if powered else Color(0.28, 0.28, 0.30)
+		var vfd_col: Color = st_data["vfd_color"] if powered else Color(0.18, 0.22, 0.22)
+		var font: Font = ThemeDB.fallback_font
+		
+		# 1. Outer Din-Slot Brushed Plastic Chassis
+		draw_rect(rect, Color(0.06, 0.065, 0.075, 0.94), true)
+		draw_rect(rect, Color(0.22, 0.24, 0.28, 1.0), false, 2.0)
+		
+		# Inner Recessed VFD Glass Screen
+		var screen_rect := Rect2(8.0, 8.0, size.x - 16.0, size.y - 30.0)
+		draw_rect(screen_rect, Color(0.02, 0.03, 0.035, 0.98), true)
+		draw_rect(screen_rect, accent_col.darkened(0.35), false, 1.5)
+		
+		# Subtle VFD scanline grid background
+		for y_line in range(int(screen_rect.position.y) + 2, int(screen_rect.end.y), 3):
+			draw_line(
+				Vector2(screen_rect.position.x + 2, y_line),
+				Vector2(screen_rect.end.x - 2, y_line),
+				Color(0.0, 0.0, 0.0, 0.35), 1.0
+			)
+		
+		# 2. Top Header Bar: Brand Badge, Stereo Indicator & Frequency
+		draw_string(
+			font, Vector2(16.0, 25.0),
+			"KENWOOD // KRC-86 TOUGE DSP",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.65, 0.70, 0.75)
+		)
+		
+		var st_badge_col: Color = Color(1.0, 0.22, 0.22) if powered else Color(0.2, 0.1, 0.1)
+		draw_string(
+			font, Vector2(size.x - 74.0, 25.0),
+			"FM STEREO",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 10, st_badge_col
+		)
+		
+		# 3. Left Section: Station Frequency, Name & Scrolling Track Marquee
+		var freq_str: String = st_data["freq"] if powered else "---.- FM"
+		draw_string(
+			font, Vector2(16.0, 50.0),
+			freq_str,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 20, vfd_col
+		)
+		
+		var bpm_str: String = "%d BPM" % int(st_data["bpm"]) if powered else "OFFLINE"
+		draw_string(
+			font, Vector2(118.0, 49.0),
+			bpm_str,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, accent_col
+		)
+		
+		var st_name: String = st_data["name"] if powered else "STANDBY // PRESS [M] POWER"
+		draw_string(
+			font, Vector2(16.0, 68.0),
+			st_name.substr(0, 26),
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, vfd_col.lightened(0.25)
+		)
+		
+		# Track Marquee Box (Clipped horizontally)
+		var marquee_box := Rect2(16.0, 75.0, 168.0, 18.0)
+		draw_rect(marquee_box, Color(0.04, 0.06, 0.07, 0.9), true)
+		if powered:
+			var tracks: Array = st_data["tracks"]
+			var raw_track: String = "  >> " + str(tracks[radio.current_track_idx]) + "   "
+			var char_len: int = raw_track.length()
+			var start_char: int = int(radio._marquee_offset * 0.18) % char_len
+			var cycled_str: String = (raw_track + raw_track).substr(start_char, 22)
+			draw_string(
+				font, Vector2(20.0, 88.0),
+				cycled_str,
+				HORIZONTAL_ALIGNMENT_LEFT, 160.0, 11, accent_col.lightened(0.35)
+			)
+		else:
+			draw_string(
+				font, Vector2(20.0, 88.0),
+				"-- AUDIO MUTED --",
+				HORIZONTAL_ALIGNMENT_LEFT, 160.0, 11, Color(0.35, 0.35, 0.38)
+			)
+		
+		# Volume Level Meter Bar
+		var vol_norm: float = remap(radio.master_volume_db, -36.0, 6.0, 0.0, 1.0)
+		draw_string(
+			font, Vector2(16.0, 108.0),
+			"VOL",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.6, 0.65, 0.7)
+		)
+		var vol_segments: int = 12
+		for v_idx in range(vol_segments):
+			var v_rect := Rect2(44.0 + v_idx * 11.5, 99.0, 9.0, 8.0)
+			var active_seg: bool = powered and (float(v_idx) / float(vol_segments) < vol_norm)
+			var seg_col: Color = vfd_col if v_idx < 9 else accent_col
+			draw_rect(v_rect, seg_col if active_seg else Color(0.08, 0.11, 0.12), true)
+		
+		# 4. Right Section: 12-Band VFD Equalizer Display
+		var eq_origin := Vector2(194.0, 32.0)
+		var eq_width: float = 132.0
+		var eq_height: float = 76.0
+		var band_w: float = eq_width / float(JDMRadioAudioSystem.NUM_VFD_BANDS)
+		var seg_h: float = eq_height / float(JDMRadioAudioSystem.SEGMENTS_PER_BAND)
+		
+		# Unlit VFD segment grid + Active lit phosphor bars
+		for b in range(JDMRadioAudioSystem.NUM_VFD_BANDS):
+			var band_val: float = radio._vfd_bands[b]
+			var peak_val: float = radio._vfd_peaks[b]
+			var lit_count: int = int(round(band_val * float(JDMRadioAudioSystem.SEGMENTS_PER_BAND)))
+			var peak_seg: int = clampi(
+				int(round(peak_val * float(JDMRadioAudioSystem.SEGMENTS_PER_BAND))) - 1,
+				-1,
+				JDMRadioAudioSystem.SEGMENTS_PER_BAND - 1
+			)
+			
+			for s in range(JDMRadioAudioSystem.SEGMENTS_PER_BAND):
+				# Draw bottom-to-top
+				var y_pos: float = eq_origin.y + eq_height - float(s + 1) * seg_h
+				var seg_rect := Rect2(
+					eq_origin.x + float(b) * band_w + 1.0,
+					y_pos + 1.0,
+					band_w - 2.5,
+					seg_h - 1.8
+				)
+				
+				var is_lit: bool = powered and (s < lit_count)
+				var is_peak: bool = powered and (s == peak_seg) and (peak_seg > 0)
+				
+				if is_peak:
+					# Red/Amber Peak Hold Cap
+					draw_rect(seg_rect, Color(1.0, 0.92, 0.85) if s >= 11 else accent_col.lightened(0.3), true)
+				elif is_lit:
+					if s >= 11:
+						draw_rect(seg_rect, Color(1.0, 0.25, 0.22), true) # Redline Peak Zone
+					elif s >= 8:
+						draw_rect(seg_rect, accent_col, true)             # Upper Mid Zone
+					else:
+						draw_rect(seg_rect, vfd_col, true)                # Base VFD Cyan/Amber
+				else:
+					draw_rect(seg_rect, Color(0.07, 0.09, 0.10, 0.85), true)
+		
+		# 5. Bottom Faceplate Hotkey Legend
+		draw_string(
+			font, Vector2(12.0, size.y - 8.0),
+			"[M] PWR/MUTE   [B / N] TUNER   [PGUP / PGDN] VOL",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.58, 0.62, 0.68)
+		)

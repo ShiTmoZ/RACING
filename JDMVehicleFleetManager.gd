@@ -371,8 +371,16 @@ func _apply_safe_vehicle_metadata(vehicle_node: Node3D, spec: Dictionary) -> voi
 # ==============================================================================
 
 func _build_ae86_trueno_mesh(is_preview: bool) -> Node3D:
-	var root: Node3D = Node3D.new()
-	root.name = "AE86_Trueno_Visual"
+	var modeler_script = preload("res://AE86TruenoModeler.gd")
+	var modeler = modeler_script.new()
+	var root: Node3D = modeler.build_vehicle_mesh()
+	if not is_preview:
+		var h_l = root.get_node_or_null("HeadlightHingeL")
+		var h_r = root.get_node_or_null("HeadlightHingeR")
+		if h_l != null and h_r != null:
+			_headlight_hinges.append(h_l)
+			_headlight_hinges.append(h_r)
+	return root
 
 	# Materials (All CULL_DISABLED per architectural specification)
 	var mat_panda_white: StandardMaterial3D = _create_material(Color(0.95, 0.95, 0.93), 0.15, 0.22)

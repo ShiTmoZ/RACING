@@ -297,8 +297,8 @@ func decorate_touge(road_curve: Curve3D, road_frames: Array = []) -> void:
 
 	# 5. Dense Flora Scatter (Cryptomeria Japanese Pines & Accent Sakura Trees)
 	# Strictly populated outside the asphalt + shoulder boundary using MultiMeshInstance3D
-	var min_flora_clearance: float = road_half_width + shoulder_margin + 5.5
-	var f_dist: float = 75.0
+	var min_flora_clearance: float = road_half_width + shoulder_margin + 6.0
+	var f_dist: float = 90.0
 	while f_dist < total_length - 4.0:
 		var f_frame: Dictionary = _sample_frame_at_distance(sampled_frames, f_dist)
 		var f_pos: Vector3 = f_frame["position"]
@@ -444,11 +444,15 @@ func _extract_uniform_frames(road_curve: Curve3D, road_frames: Array, step_meter
 		if baked_len > 1.0:
 			var d: float = 0.0
 			while d <= baked_len:
-				var xform: Transform3D = road_curve.sample_baked_with_rotation(d, true, true)
-				var pos: Vector3 = xform.origin
-				var fwd: Vector3 = -xform.basis.z.normalized()
-				var right: Vector3 = xform.basis.x.normalized()
-				var up: Vector3 = xform.basis.y.normalized()
+				var pos: Vector3 = road_curve.sample_baked(d, true)
+				var pos_next: Vector3 = road_curve.sample_baked(minf(d + 1.0, baked_len), true)
+				var fwd: Vector3 = (pos_next - pos).normalized()
+				if fwd.length_squared() < 0.0001:
+					fwd = Vector3.FORWARD
+				var right: Vector3 = fwd.cross(Vector3.UP).normalized()
+				if right.length_squared() < 0.0001:
+					right = Vector3.RIGHT
+				var up: Vector3 = right.cross(fwd).normalized()
 				uniform_frames.append({
 					"distance": d,
 					"position": pos,
