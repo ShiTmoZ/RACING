@@ -68,6 +68,13 @@ func _ready() -> void:
 	if not Engine.is_editor_hint() and spawn_vehicle_enabled:
 		call_deferred("_spawn_player_vehicle")
 		call_deferred("_setup_desktop_ui")
+		call_deferred("_setup_radio_audio_system")
+
+
+func _setup_radio_audio_system() -> void:
+	var radio := JDMRadioAudioSystem.new()
+	radio.name = "JDMRadioAudioSystem"
+	add_child(radio)
 
 
 func _build_entire_environment() -> void:
