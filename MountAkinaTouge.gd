@@ -48,6 +48,7 @@ var _frames: Array[RoadFrame] = []
 var _curve: Curve3D = Curve3D.new()
 var _spawn_transform: Transform3D = Transform3D.IDENTITY
 var _spawned_vehicle: Node3D = null
+var _gfx_manager: GraphicsSettingsManager = null
 
 # Procedural Materials Cache
 var _mat_road: ShaderMaterial
@@ -69,6 +70,13 @@ func _ready() -> void:
 		call_deferred("_spawn_player_vehicle")
 		call_deferred("_setup_desktop_ui")
 		call_deferred("_setup_radio_audio_system")
+		call_deferred("_setup_graphics_settings_manager")
+
+
+func _setup_graphics_settings_manager() -> void:
+	_gfx_manager = GraphicsSettingsManager.new()
+	_gfx_manager.name = "GraphicsSettingsManager"
+	add_child(_gfx_manager)
 
 
 func _setup_radio_audio_system() -> void:
@@ -1442,6 +1450,15 @@ func _setup_desktop_ui() -> void:
 				(_spawned_vehicle as RigidBody3D).angular_velocity = Vector3.ZERO
 	)
 	pause_box.add_child(btn_restart)
+
+	var btn_gfx := Button.new()
+	btn_gfx.text = "GRAPHICS & ENGINE SETTINGS (O)"
+	btn_gfx.custom_minimum_size = Vector2(0, 44)
+	btn_gfx.pressed.connect(func():
+		if _gfx_manager != null:
+			_gfx_manager.toggle_menu()
+	)
+	pause_box.add_child(btn_gfx)
 
 	var btn_fs_menu := Button.new()
 	btn_fs_menu.text = "TOGGLE FULLSCREEN (F11)"

@@ -13,6 +13,7 @@ config_version=5
 config/name="RACING - Mount Akina Touge (JDM)"
 run/main_scene="res://MountAkinaTouge.tscn"
 config/features=PackedStringArray("4.3", "Forward Plus")
+run/max_fps=144
 
 [display]
 
