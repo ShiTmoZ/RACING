@@ -42,8 +42,8 @@ signal gear_changed(new_gear: int)
 @export var upshift_rpm: float = 6900.0
 @export var downshift_rpm: float = 2500.0
 @export var shift_duration: float = 0.20
-@export var reverse_torque_scale: float = 0.35
-@export var max_reverse_speed: float = 9.0
+@export var reverse_torque_scale: float = 0.90
+@export var max_reverse_speed: float = 18.0
 
 @export_group("Tires")
 ## Peak friction coefficient of the tire model (1.0 = 1 g).
@@ -256,7 +256,8 @@ func _update_drivetrain(delta: float) -> void:
 			gear_number = _gear_index + 1
 			gear_changed.emit(gear_number)
 
-	var torque := _engine_torque(engine_rpm) * throttle_input
+	var drive_input := brake_input if is_reversing else throttle_input
+	var torque := _engine_torque(engine_rpm) * drive_input
 	var force := torque * ratio * final_drive * drivetrain_efficiency / wheel_radius
 
 	if is_reversing:

@@ -47,6 +47,7 @@ class RoadFrame:
 const GraphicsSettingsManager = preload("res://GraphicsSettingsManager.gd")
 const JDMRadioAudioSystem = preload("res://JDMRadioAudioSystem.gd")
 const AkinaRoadsidePropsDecorator = preload("res://AkinaRoadsidePropsDecorator.gd")
+const JDMVehicleFleetManager = preload("res://JDMVehicleFleetManager.gd")
 
 var _frames: Array[RoadFrame] = []
 var _curve: Curve3D = Curve3D.new()
@@ -75,6 +76,15 @@ func _ready() -> void:
 		call_deferred("_setup_desktop_ui")
 		call_deferred("_setup_radio_audio_system")
 		call_deferred("_setup_graphics_settings_manager")
+		call_deferred("_setup_vehicle_fleet_manager")
+
+
+func _setup_vehicle_fleet_manager() -> void:
+	var fleet_mgr := JDMVehicleFleetManager.new()
+	fleet_mgr.name = "JDMVehicleFleetManager"
+	if _spawned_vehicle != null:
+		fleet_mgr.target_player_vehicle = _spawned_vehicle
+	add_child(fleet_mgr)
 
 
 func _setup_graphics_settings_manager() -> void:
@@ -519,7 +529,7 @@ func _sample_road_frames() -> void:
 	if n_frames > 4:
 		var start_f: RoadFrame = _frames[2]
 		var spawn_basis := Basis(start_f.binormal, start_f.normal, -start_f.tangent).orthonormalized()
-		_spawn_transform = Transform3D(spawn_basis, start_f.position + start_f.normal * 1.2)
+		_spawn_transform = Transform3D(spawn_basis, start_f.position + start_f.normal * 0.48)
 
 
 # ==============================================================================

@@ -16,7 +16,7 @@ extends Node3D
 @export var guardrail_cull_distance: float = 280.0
 @export var reflector_cull_distance: float = 220.0
 @export var pole_cull_distance: float = 450.0
-@export var flora_cull_distance: float = 550.0
+@export var flora_cull_distance: float = 1200.0
 @export var detail_prop_cull_distance: float = 200.0
 @export var enable_apex_omni_lights: bool = true
 @export var omni_light_cull_distance: float = 135.0
@@ -297,8 +297,8 @@ func decorate_touge(road_curve: Curve3D, road_frames: Array = []) -> void:
 
 	# 5. Dense Flora Scatter (Cryptomeria Japanese Pines & Accent Sakura Trees)
 	# Strictly populated outside the asphalt + shoulder boundary using MultiMeshInstance3D
-	var min_flora_clearance: float = road_half_width + shoulder_margin + 2.6
-	var f_dist: float = 4.0
+	var min_flora_clearance: float = road_half_width + shoulder_margin + 5.5
+	var f_dist: float = 75.0
 	while f_dist < total_length - 4.0:
 		var f_frame: Dictionary = _sample_frame_at_distance(sampled_frames, f_dist)
 		var f_pos: Vector3 = f_frame["position"]
