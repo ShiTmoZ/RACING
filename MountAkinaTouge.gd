@@ -1383,66 +1383,15 @@ func _setup_desktop_ui() -> void:
 	guide_vbox.add_child(guide_title)
 
 	var guide_text := Label.new()
-	guide_text.text = "[W / ↑] Accelerate      [S / ↓] Brake / Reverse\n[A D / ← →] Steer       [SPACE] Handbrake Drift\n[R] Respawn             [F11] Fullscreen  [ESC] Pause"
+	guide_text.text = "[W / ↑] Accelerate      [S / ↓] Brake / Reverse\n[A D / ← →] Steer       [SPACE] Handbrake Drift\n[R] Respawn Car         [F1] Driver Manual   [F11] Fullscreen  [ESC] Pause"
 	guide_text.add_theme_color_override("font_color", Color(0.85, 0.88, 0.94))
 	guide_text.add_theme_font_size_override("font_size", 12)
 	guide_vbox.add_child(guide_text)
 
-	# 3. Bottom-Right JDM Telemetry HUD (Speedometer & RPM)
-	var hud_panel := PanelContainer.new()
-	hud_panel.name = "TelemetryHUD"
-	hud_panel.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	hud_panel.offset_left = -290
-	hud_panel.offset_top = -150
-	hud_panel.offset_right = -24
-	hud_panel.offset_bottom = -24
-	var hud_style := StyleBoxFlat.new()
-	hud_style.bg_color = Color(0.04, 0.05, 0.08, 0.85)
-	hud_style.set_corner_radius_all(10)
-	hud_style.border_color = Color(0.9, 0.3, 0.1, 0.6)
-	hud_style.set_border_width_all(2)
-	hud_style.content_margin_left = 16
-	hud_style.content_margin_top = 12
-	hud_style.content_margin_right = 16
-	hud_style.content_margin_bottom = 12
-	hud_panel.add_theme_stylebox_override("panel", hud_style)
-	root_control.add_child(hud_panel)
-
-	var hud_vbox := VBoxContainer.new()
-	hud_panel.add_child(hud_vbox)
-
-	var speed_box := HBoxContainer.new()
-	hud_vbox.add_child(speed_box)
-
-	_speed_val_label = Label.new()
-	_speed_val_label.text = "0"
-	_speed_val_label.add_theme_font_size_override("font_size", 42)
-	_speed_val_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0))
-	speed_box.add_child(_speed_val_label)
-
-	var unit_vbox := VBoxContainer.new()
-	unit_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	speed_box.add_child(unit_vbox)
-
-	var unit_label := Label.new()
-	unit_label.text = " KM/H"
-	unit_label.add_theme_font_size_override("font_size", 16)
-	unit_label.add_theme_color_override("font_color", Color(0.5, 0.6, 0.7))
-	unit_vbox.add_child(unit_label)
-
-	_gear_val_label = Label.new()
-	_gear_val_label.text = "  GEAR 1"
-	_gear_val_label.add_theme_font_size_override("font_size", 16)
-	_gear_val_label.add_theme_color_override("font_color", Color(1.0, 0.65, 0.1))
-	unit_vbox.add_child(_gear_val_label)
-
-	_rpm_bar = ProgressBar.new()
-	_rpm_bar.min_value = 0
-	_rpm_bar.max_value = 8500
-	_rpm_bar.value = 900
-	_rpm_bar.show_percentage = false
-	_rpm_bar.custom_minimum_size = Vector2(240, 14)
-	hud_vbox.add_child(_rpm_bar)
+	# 3. Mount Forza Drift Scoring, Sector Lap Timing & Interactive JDM Manual
+	var forza_hud := ForzaHUDAndManual.new()
+	forza_hud.name = "ForzaHUDAndManual"
+	add_child(forza_hud)
 
 	# 4. Pause Menu (ESC Overlay)
 	_pause_panel = PanelContainer.new()
