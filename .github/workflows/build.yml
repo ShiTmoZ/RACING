@@ -9,9 +9,6 @@ on:
 permissions:
   contents: write
 
-env:
-  EXPORT_NAME: RACING
-
 jobs:
   export:
     name: Build & Package Godot 4.3 Binaries
@@ -21,6 +18,16 @@ jobs:
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
+
+      - name: Determine Version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="v1.5.3"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Building RACING for release version: $VERSION"
 
       - name: Setup Export Directory & Templates
         run: |
@@ -32,36 +39,36 @@ jobs:
 
       - name: Export Windows Executable
         run: |
-          godot --headless --verbose --export-release "Windows Desktop" build/windows/$EXPORT_NAME.exe
+          godot --headless --verbose --export-release "Windows Desktop" "build/windows/RACING-${VERSION}.exe"
 
       - name: Export Linux Binary
         run: |
-          godot --headless --verbose --export-release "Linux/X11" build/linux/$EXPORT_NAME.x86_64
+          godot --headless --verbose --export-release "Linux/X11" "build/linux/RACING-${VERSION}.x86_64"
 
       - name: Compress Release Packages
         run: |
-          cd build/windows && zip -r ../../RACING-Windows-x86_64.zip . && cd ../..
-          cd build/linux && zip -r ../../RACING-Linux-x86_64.zip . && cd ../..
+          cd build/windows && zip -r "../../RACING-${VERSION}-Windows-x86_64.zip" . && cd ../..
+          cd build/linux && zip -r "../../RACING-${VERSION}-Linux-x86_64.zip" . && cd ../..
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RACING-Windows-x86_64
-          path: RACING-Windows-x86_64.zip
+          name: RACING-${{ env.VERSION }}-Windows-x86_64
+          path: RACING-${{ env.VERSION }}-Windows-x86_64.zip
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RACING-Linux-x86_64
-          path: RACING-Linux-x86_64.zip
+          name: RACING-${{ env.VERSION }}-Linux-x86_64
+          path: RACING-${{ env.VERSION }}-Linux-x86_64.zip
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            RACING-Windows-x86_64.zip
-            RACING-Linux-x86_64.zip
+            RACING-${{ env.VERSION }}-Windows-x86_64.zip
+            RACING-${{ env.VERSION }}-Linux-x86_64.zip
           draft: false
           prerelease: false
           generate_release_notes: true
