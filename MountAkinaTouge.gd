@@ -1251,6 +1251,7 @@ func _spawn_player_vehicle() -> void:
 		return
 	
 	_spawned_vehicle.name = "SkylineGTR_R34"
+	_spawned_vehicle.add_to_group("player_vehicle")
 	add_child(_spawned_vehicle)
 	_spawned_vehicle.global_transform = _spawn_transform
 	
