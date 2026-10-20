@@ -58,8 +58,6 @@ center_of_mass = Vector3(0, -0.15, 0)
 collision_layer = 2
 collision_mask = 1
 script = ExtResource("1_vehicle")
-wheel_rays = Array[RayCast3D]([NodePath("RayFL"), NodePath("RayFR"), NodePath("RayRL"), NodePath("RayRR")])
-wheel_meshes = Array[MeshInstance3D]([NodePath("WheelFL"), NodePath("WheelFR"), NodePath("WheelRL"), NodePath("WheelRR")])
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="."]
 shape = SubResource("BoxShape3D_chassis")

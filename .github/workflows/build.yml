@@ -22,10 +22,13 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v4
 
-      - name: Setup Export Directory
+      - name: Setup Export Directory & Templates
         run: |
           mkdir -v -p build/windows
           mkdir -v -p build/linux
+          mkdir -v -p /github/home/.local/share/godot/export_templates
+          ln -s /root/.local/share/godot/export_templates/4.3.stable /github/home/.local/share/godot/export_templates/4.3.stable || cp -r /root/.local/share/godot/export_templates/4.3.stable /github/home/.local/share/godot/export_templates/
+          ls -la /github/home/.local/share/godot/export_templates/4.3.stable/
 
       - name: Export Windows Executable
         run: |
