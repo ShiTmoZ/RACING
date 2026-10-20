@@ -132,12 +132,28 @@ func _physics_process(delta: float) -> void:
 	_update_wheel_visuals(delta)
 	_check_recovery(delta)
 	if r34_model != null:
-		r34_model.is_braking = (brake_input > 0.05) or (handbrake_input > 0.1)
-		r34_model.is_reversing = is_reversing
-		r34_model.headlights_on = true
+		if "is_braking" in r34_model:
+			r34_model.is_braking = (brake_input > 0.05) or (handbrake_input > 0.1)
+		if "is_reversing" in r34_model:
+			r34_model.is_reversing = is_reversing
+		if "headlights_on" in r34_model:
+			r34_model.headlights_on = true
 
 # ----------------------------------------------------------------------------- setup
 var r34_model: Node3D = null
+
+func on_visual_chassis_rebound(model_root: Node3D, found_wheels: Array[Node3D]) -> void:
+	r34_model = model_root
+	wheel_meshes.clear()
+	for w in found_wheels:
+		if is_instance_valid(w):
+			wheel_meshes.append(w)
+
+func rebind_wheels(found_wheels: Array[Node3D]) -> void:
+	wheel_meshes.clear()
+	for w in found_wheels:
+		if is_instance_valid(w):
+			wheel_meshes.append(w)
 
 func _resolve_wheel_nodes() -> void:
 	# The scene wires these through exported node references, but the controller
@@ -261,7 +277,7 @@ func _update_drivetrain(delta: float) -> void:
 	var force := torque * ratio * final_drive * drivetrain_efficiency / wheel_radius
 
 	if is_reversing:
-		force = -force * reverse_torque_scale
+		force = -absf(force) * reverse_torque_scale
 		if forward_speed < -max_reverse_speed:
 			force = 0.0
 	if _shift_timer > 0.0:
