@@ -78,6 +78,14 @@ func _ready() -> void:
 		call_deferred("_setup_graphics_settings_manager")
 		call_deferred("_setup_vehicle_fleet_manager")
 		call_deferred("_setup_multiplayer_network_manager")
+		call_deferred("_setup_anime_post_process")
+
+
+func _setup_anime_post_process() -> void:
+	var anime_script := load("res://AnimePostProcessEffect.gd")
+	if anime_script != null:
+		var anime_mgr = anime_script.new()
+		add_child(anime_mgr)
 
 
 func _setup_multiplayer_network_manager() -> void:
@@ -1442,7 +1450,7 @@ func _setup_desktop_ui() -> void:
 	guide_vbox.add_child(guide_title)
 
 	var guide_text := Label.new()
-	guide_text.text = "[W / ↑] Accelerate      [S / ↓] Brake / Reverse\n[A D / ← →] Steer       [SPACE] Handbrake Drift\n[R] Respawn Car         [F1] Driver Manual   [F11] Fullscreen  [ESC] Pause"
+	guide_text.text = "[W / ↑] Accelerate      [S / ↓] Brake / Reverse\n[A D / ← →] Steer       [SPACE] Handbrake Drift\n[R] Respawn Car         [F1] Manual  [F2] Anime Style  [TAB] Netcode"
 	guide_text.add_theme_color_override("font_color", Color(0.85, 0.88, 0.94))
 	guide_text.add_theme_font_size_override("font_size", 12)
 	guide_vbox.add_child(guide_text)
