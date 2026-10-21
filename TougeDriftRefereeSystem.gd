@@ -242,6 +242,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_F4:
 				reset_water_cup()
 
+func _process(_delta: float) -> void:
+	if not _headless_mode and _canvas_drawer != null and _hud_visible:
+		_canvas_drawer.queue_redraw()
+
 func _physics_process(delta: float) -> void:
 	var dt: float = clampf(delta, 0.0005, 0.05)
 
@@ -266,10 +270,7 @@ func _physics_process(delta: float) -> void:
 		if _vehicle_search_timer <= 0.0:
 			_vehicle_search_timer = 0.5
 			_locate_player_vehicle()
-		_update_water_cup_oscillator(dt)
 		_update_visual_effects(dt)
-		if not _headless_mode and _canvas_drawer != null and _hud_visible:
-			_canvas_drawer.queue_redraw()
 		return
 
 	_vehicle_bind_warmup += dt
@@ -277,26 +278,20 @@ func _physics_process(delta: float) -> void:
 	# Step 1: Sample vehicle kinematics, G-forces, and Jerk
 	_sample_vehicle_telemetry(dt)
 
-	# Step 2: Update Fujiwara Water Cup 2nd-order oscillator & spill logic
-	_update_water_cup_oscillator(dt)
-
-	# Step 3: Evaluate Wall & Gutter proximity
+	# Step 2: Evaluate Wall & Gutter proximity
 	_evaluate_gutter_and_wall_proximity()
 
-	# Step 4: Evaluate Simcade Drift Scoring, Combos, and Rank
+	# Step 3: Evaluate Simcade Drift Scoring, Combos, and Rank
 	_update_drift_scoring_engine(dt)
 
-	# Step 5: Check Clutch Kick / Redline Shift triggers for Manga Pop-ups
+	# Step 4: Check Clutch Kick / Redline Shift triggers for Manga Pop-ups
 	_check_clutch_kick_and_shift_triggers()
 
-	# Step 6: Animate Pop-Up Headlights
+	# Step 5: Animate Pop-Up Headlights
 	_update_headlight_animation(dt)
 
-	# Step 7: Update Manga Onomatopoeia, Callouts, and Splash Droplets
+	# Step 6: Update Manga Onomatopoeia and Callouts
 	_update_visual_effects(dt)
-
-	if not _headless_mode and _canvas_drawer != null and _hud_visible:
-		_canvas_drawer.queue_redraw()
 
 # ==============================================================================
 # VEHICLE DISCOVERY & HEADLIGHT RIGGING
@@ -587,66 +582,13 @@ func _sample_vehicle_telemetry(dt: float) -> void:
 	_prev_yaw_rad = curr_yaw
 
 # ==============================================================================
-# 1. THE LEGENDARY FUJIWARA WATER CUP (2ND-ORDER OSCILLATOR & SPILL LOGIC)
+# 1. THE LEGENDARY FUJIWARA WATER CUP (DISABLED - ZERO LAG)
 # ==============================================================================
-func _update_water_cup_oscillator(dt: float) -> void:
-	# 2nd-Order Damped Spring Oscillator:
-	# d2(theta)/dt2 = wn^2 * (theta_target - theta) - 2 * zeta * wn * d(theta)/dt + Jerk_Impulse
-	var wn: float = CUP_NATURAL_FREQ
-	var zeta: float = CUP_DAMPING_RATIO
+func _update_water_cup_oscillator(_dt: float) -> void:
+	pass
 
-	# Target water inclination angle proportional to G-force vector
-	var theta_target: Vector2 = Vector2(_g_lat, _g_long) * 0.65
-
-	# Sub-step integration for rock-solid numerical stability
-	var substeps: int = 2
-	var sub_dt: float = dt / float(substeps)
-	for _i: int in range(substeps):
-		var displacement: Vector2 = _cup_angle - theta_target
-		var spring_force: Vector2 = -(wn * wn) * displacement
-		var damping_force: Vector2 = -(2.0 * zeta * wn) * _cup_angular_vel
-		var jerk_excitation: Vector2 = _jerk_vec * 0.22
-		var angular_accel: Vector2 = spring_force + damping_force + jerk_excitation
-
-		_cup_angular_vel += angular_accel * sub_dt
-		_cup_angle += _cup_angular_vel * sub_dt
-
-	_cup_angle = _cup_angle.limit_length(1.45)
-
-	# Surface ripple harmonics from speed, gutter hook rumble, and slosh velocity
-	var gutter_vib: float = 0.45 if _is_gutter_hooked else 0.0
-	var target_ripple: float = clampf(_cup_angular_vel.length() * 0.18 + (_speed_kmh / 180.0) * 0.15 + gutter_vib, 0.02, 1.0)
-	_ripple_amplitude = lerpf(_ripple_amplitude, target_ripple, clampf(dt * 8.0, 0.0, 1.0))
-	_ripple_phase = wrapf(_ripple_phase + dt * (14.0 + _speed_kmh * 0.08), 0.0, TAU)
-
-	# Evaluate Water Spill Threshold (Jerk > ~1.8 G/s) after warmup
-	if _vehicle != null and _vehicle_bind_warmup > 1.0 and _speed_kmh > 18.0:
-		if _jerk_mag > JERK_SPILL_THRESHOLD and _spill_cooldown <= 0.0 and _water_level > 0.0:
-			_trigger_water_spill(_jerk_mag)
-
-func _trigger_water_spill(jerk_val: float) -> void:
-	_spill_cooldown = SPILL_COOLDOWN_SEC
-	_spill_flash_timer = 0.85
-	_water_level = maxf(0.0, _water_level - WATER_SPILL_PENALTY_PCT)
-	_combo_multiplier = 1.0
-	_has_weight_transfer_bonus = false
-
-	# Spawn splash droplets around the Water Cup HUD widget
-	var viewport_size: Vector2 = _get_viewport_size()
-	var cup_center: Vector2 = _get_cup_widget_center(viewport_size)
-	for i: int in range(16):
-		var drop := WaterDropletItem.new()
-		var spread_x: float = randf_range(-34.0, 34.0)
-		drop.pos = cup_center + Vector2(spread_x, -38.0)
-		var dir_x: float = clampf(_g_lat * 85.0 + randf_range(-95.0, 95.0), -150.0, 150.0)
-		var dir_y: float = randf_range(-165.0, -55.0)
-		drop.vel = Vector2(dir_x, dir_y)
-		drop.radius = randf_range(2.5, 5.2)
-		drop.lifetime = randf_range(0.45, 0.78)
-		_droplets.append(drop)
-
-	_push_callout("WATER SPILLED! -15%", "HARSH JERK (%.1f G/s) - COMBO RESET 1.0x" % jerk_val, Color(1.0, 0.22, 0.25))
-	water_spilled.emit(_water_level, jerk_val)
+func _trigger_water_spill(_jerk_val: float) -> void:
+	pass
 
 func reset_water_cup() -> void:
 	_water_level = 100.0
@@ -1012,10 +954,7 @@ func _on_canvas_draw() -> void:
 	# 3. Draw Top-Right Initial D Arcade Score, Combo & Active Drift Counter
 	_draw_top_right_score_panel(font, vp_size)
 
-	# 4. Draw Bottom-Left Legendary Fujiwara Water Cup Widget
-	_draw_bottom_left_water_cup_widget(font, vp_size)
-
-	# 5. Draw Center-Screen Technique Callouts
+	# 4. Draw Center-Screen Technique Callouts
 	_draw_center_callouts(font, vp_size)
 
 # ------------------------------------------------------------------------------
@@ -1217,116 +1156,8 @@ func _get_cup_widget_center(vp_size: Vector2) -> Vector2:
 	# Positioned in bottom-left above controls guide
 	return Vector2(126.0, vp_size.y - 235.0)
 
-func _draw_bottom_left_water_cup_widget(font: Font, vp_size: Vector2) -> void:
-	var cup_center: Vector2 = _get_cup_widget_center(vp_size)
-	var panel_rect := Rect2(22.0, cup_center.y - 92.0, 228.0, 188.0)
-
-	# Panel Background with spill/perfect-transfer flash aura
-	var bg_col := Color(0.04, 0.05, 0.08, 0.88)
-	if _spill_flash_timer > 0.0:
-		bg_col = bg_col.lerp(Color(0.55, 0.06, 0.08, 0.92), clampf(_spill_flash_timer, 0.0, 1.0))
-	elif _perfect_transfer_flash > 0.0:
-		bg_col = bg_col.lerp(Color(0.06, 0.38, 0.42, 0.92), clampf(_perfect_transfer_flash, 0.0, 1.0))
-
-	_canvas_drawer.draw_rect(panel_rect, bg_col, true)
-	var border_col := Color(1.0, 0.22, 0.25) if _spill_flash_timer > 0.0 else (Color(0.25, 1.0, 0.85) if _perfect_transfer_flash > 0.0 else Color(0.32, 0.72, 0.98, 0.85))
-	_canvas_drawer.draw_rect(panel_rect, border_col, false, 2.0)
-
-	# Widget Title
-	_canvas_drawer.draw_string(font, Vector2(panel_rect.position.x + 12.0, panel_rect.position.y + 18.0), "FUJIWARA TOFU WATER CUP", HORIZONTAL_ALIGNMENT_LEFT, 204.0, 12, Color(0.88, 0.94, 1.0))
-
-	# Cup Geometry (Tapered Paper/Glass Cup Silhouette)
-	var cup_cx: float = panel_rect.position.x + 76.0
-	var cup_cy: float = cup_center.y + 4.0
-	var top_hw: float = 42.0
-	var bot_hw: float = 28.0
-	var half_h: float = 50.0
-
-	var top_left := Vector2(cup_cx - top_hw, cup_cy - half_h)
-	var top_right := Vector2(cup_cx + top_hw, cup_cy - half_h)
-	var bot_right := Vector2(cup_cx + bot_hw, cup_cy + half_h)
-	var bot_left := Vector2(cup_cx - bot_hw, cup_cy + half_h)
-
-	# Cup translucent interior backing
-	var cup_poly := PackedVector2Array([top_left, top_right, bot_right, bot_left])
-	_canvas_drawer.draw_polygon(cup_poly, [Color(0.10, 0.14, 0.20, 0.75)])
-
-	# Animated Water Polygon & Meniscus Wave inside the cup
-	if _water_level > 0.5:
-		var fill_ratio: float = clampf(_water_level / 100.0, 0.0, 1.0) * 0.82
-		var base_water_y: float = lerpf(cup_cy + half_h - 4.0, cup_cy - half_h + 12.0, fill_ratio)
-
-		# Lateral tilt from 2nd-order oscillator (_cup_angle.x) + pitch shift from _cup_angle.y
-		var tilt_dy: float = clampf(_cup_angle.x * 28.0, -30.0, 30.0)
-		var pitch_offset: float = clampf(_cup_angle.y * 8.0, -10.0, 10.0)
-
-		var y_left: float = clampf(base_water_y - tilt_dy + pitch_offset, cup_cy - half_h + 2.0, cup_cy + half_h - 2.0)
-		var y_right: float = clampf(base_water_y + tilt_dy + pitch_offset, cup_cy - half_h + 2.0, cup_cy + half_h - 2.0)
-
-		# Sample wave points across meniscus from left wall to right wall
-		var water_poly := PackedVector2Array()
-		var meniscus_line := PackedVector2Array()
-		var steps: int = 12
-		for s: int in range(steps + 1):
-			var u: float = float(s) / float(steps)
-			var wy_base: float = lerpf(y_left, y_right, u)
-			var wave: float = sin(_ripple_phase + u * PI * 2.5) * (3.5 * _ripple_amplitude)
-			var wy: float = clampf(wy_base + wave, cup_cy - half_h + 1.0, cup_cy + half_h - 2.0)
-			var wall_t: float = clampf((wy - (cup_cy - half_h)) / (half_h * 2.0), 0.0, 1.0)
-			var curr_hw: float = lerpf(top_hw - 2.0, bot_hw - 2.0, wall_t)
-			var wx: float = lerpf(cup_cx - curr_hw, cup_cx + curr_hw, u)
-			var pt := Vector2(wx, wy)
-			water_poly.append(pt)
-			meniscus_line.append(pt)
-
-		water_poly.append(Vector2(bot_right.x - 2.0, bot_right.y - 2.0))
-		water_poly.append(Vector2(bot_left.x + 2.0, bot_left.y - 2.0))
-
-		var water_col := Color(0.18, 0.65, 0.98, 0.82)
-		if _spill_flash_timer > 0.0:
-			water_col = water_col.lerp(Color(1.0, 0.25, 0.30, 0.88), clampf(_spill_flash_timer, 0.0, 1.0))
-		_canvas_drawer.draw_polygon(water_poly, [water_col])
-
-		# Bright meniscus highlight crest
-		_canvas_drawer.draw_polyline(meniscus_line, Color(0.72, 0.94, 1.0, 0.95), 2.4)
-
-	# Subtle Tofu Shop band on cup exterior ("藤原とうふ店")
-	_canvas_drawer.draw_string(font, Vector2(cup_cx - 32.0, cup_cy + 22.0), "藤原とうふ店", HORIZONTAL_ALIGNMENT_CENTER, 64.0, 10, Color(0.85, 0.90, 0.96, 0.42))
-
-	# Cup Rim & Walls Outline
-	var cup_outline := PackedVector2Array([top_left, bot_left, bot_right, top_right])
-	_canvas_drawer.draw_polyline(cup_outline, Color(0.88, 0.94, 1.0, 0.95), 2.5)
-	_canvas_drawer.draw_arc(Vector2(cup_cx, cup_cy - half_h), top_hw, 0.0, TAU, 28, Color(0.75, 0.85, 0.96, 0.75), 1.6)
-
-	# Vertical Water Level Percentage Bar (100% -> 0%)
-	var lvl_x: float = panel_rect.position.x + 140.0
-	var lvl_y: float = cup_cy - half_h
-	var lvl_w: float = 16.0
-	var lvl_h: float = half_h * 2.0
-	_canvas_drawer.draw_rect(Rect2(lvl_x, lvl_y, lvl_w, lvl_h), Color(0.10, 0.13, 0.18, 0.95), true)
-	var fill_h: float = lvl_h * clampf(_water_level / 100.0, 0.0, 1.0)
-	var bar_col := Color(0.22, 0.78, 1.0) if _water_level > 35.0 else Color(1.0, 0.28, 0.30)
-	if fill_h > 0.5:
-		_canvas_drawer.draw_rect(Rect2(lvl_x, lvl_y + (lvl_h - fill_h), lvl_w, fill_h), bar_col, true)
-	_canvas_drawer.draw_rect(Rect2(lvl_x, lvl_y, lvl_w, lvl_h), Color(0.65, 0.75, 0.88, 0.85), false, 1.5)
-
-	# Water % & G-Force / Jerk Telemetry Readout
-	_canvas_drawer.draw_string_outline(font, Vector2(lvl_x + 22.0, lvl_y + 18.0), "%.0f%%" % _water_level, HORIZONTAL_ALIGNMENT_LEFT, 65.0, 18, 4, Color.BLACK)
-	_canvas_drawer.draw_string(font, Vector2(lvl_x + 22.0, lvl_y + 18.0), "%.0f%%" % _water_level, HORIZONTAL_ALIGNMENT_LEFT, 65.0, 18, bar_col)
-
-	_canvas_drawer.draw_string(font, Vector2(lvl_x + 22.0, lvl_y + 42.0), "LAT: %.1fG" % absf(_g_lat), HORIZONTAL_ALIGNMENT_LEFT, 68.0, 11, Color(0.80, 0.88, 0.96))
-	_canvas_drawer.draw_string(font, Vector2(lvl_x + 22.0, lvl_y + 58.0), "JRK: %.1f" % _jerk_mag, HORIZONTAL_ALIGNMENT_LEFT, 68.0, 11, Color(1.0, 0.45, 0.45) if _jerk_mag > 1.4 else Color(0.72, 0.82, 0.92))
-	_canvas_drawer.draw_string(font, Vector2(lvl_x + 22.0, lvl_y + 92.0), "[F4] FILL", HORIZONTAL_ALIGNMENT_LEFT, 68.0, 10, Color(0.58, 0.68, 0.80))
-
-	# Bottom Status Line inside Cup Widget
-	var cup_status: String = "SPILL! COMBO RESET" if _spill_flash_timer > 0.0 else ("PERFECT TRANSFER!" if _perfect_transfer_flash > 0.0 else "SMOOTH SLOSH")
-	var status_col: Color = Color(1.0, 0.30, 0.32) if _spill_flash_timer > 0.0 else (Color(0.28, 1.0, 0.82) if _perfect_transfer_flash > 0.0 else Color(0.65, 0.78, 0.92))
-	_canvas_drawer.draw_string(font, Vector2(panel_rect.position.x + 12.0, panel_rect.end.y - 10.0), cup_status, HORIZONTAL_ALIGNMENT_LEFT, 204.0, 11, status_col)
-
-	# Draw Animated Splash Droplets on Spill
-	for d: WaterDropletItem in _droplets:
-		var d_alpha: float = clampf(1.0 - (d.age / d.lifetime), 0.0, 1.0)
-		_canvas_drawer.draw_circle(d.pos, d.radius, Color(0.35, 0.82, 1.0, d_alpha))
+func _draw_bottom_left_water_cup_widget(_font: Font, _vp_size: Vector2) -> void:
+	pass
 
 # ------------------------------------------------------------------------------
 # CENTER-SCREEN TECHNIQUE CALLOUTS

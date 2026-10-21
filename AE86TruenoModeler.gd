@@ -1188,13 +1188,6 @@ func _build_detailed_cockpit(parent: Node3D) -> void:
 	tach_needle.size = Vector3(0.008, 0.045, 0.008)
 	_spawn_mesh(cockpit, "TRDTachNeedle", tach_needle, _mat_taillight_amber, Vector3(0.38, 0.795, -0.24), Vector3(-12.0, 0.0, -38.0))
 
-	# Fujiwara Tofu Delivery Cup Holder & Water Cup on Center Dash
-	var cup_mesh := CylinderMesh.new()
-	cup_mesh.top_radius = 0.036
-	cup_mesh.bottom_radius = 0.028
-	cup_mesh.height = 0.095
-	_spawn_mesh(cockpit, "TofuWaterCup", cup_mesh, _mat_taillight_reverse, Vector3(0.09, 0.81, -0.24))
-
 	# Nardi Classic 3-Spoke Deep-Corn Steering Wheel (RHD at X = +0.34)
 	var col_mesh := CylinderMesh.new()
 	col_mesh.top_radius = 0.032
