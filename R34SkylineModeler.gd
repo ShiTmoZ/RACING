@@ -1,964 +1,1368 @@
 @tool
 class_name R34SkylineModeler
 extends Node3D
-## Procedural 3D Modeler for Nissan Skyline GT-R (BNR34) - Godot 4.3 Vulkan Forward+
-## Builds an authentic, multi-material procedural mesh hierarchy with reactive lighting
-## and separated wheel/caliper assemblies ready for VehicleBody3D or custom raycast physics.
 
 # ==============================================================================
-# EXPORTED CONFIGURATION & REACTIVE CONTROLS
+# R34SkylineModeler.gd - Complete Procedural 1999 Nissan Skyline GT-R BNR34
+# Nismo Z-Tune Specification | Cel-Shaded Cyber-Anime & Manga Ink Edition
+# Target Engine: Godot 4.3 (Vulkan Forward+)
 # ==============================================================================
-@export_group("Modeler Controls")
-@export var rebuild_model: bool = false:
-	set(value):
-		if value:
-			generate_vehicle()
-		rebuild_model = false
 
-@export_group("Paint & Aesthetics")
-@export var body_color: Color = Color(0.04, 0.18, 0.65, 1.0): # Iconic TV2 Bayside Blue
-	set(value):
-		body_color = value
-		if _mat_body:
-			_mat_body.albedo_color = body_color
-
-@export var rim_color: Color = Color(0.18, 0.16, 0.14, 1.0): # Nismo Bronze / Gunmetal
-	set(value):
-		rim_color = value
-		if _mat_rim:
-			_mat_rim.albedo_color = rim_color
-
-@export_group("Lighting State (Vulkan Bloom)")
-@export var is_braking: bool = false:
-	set(value):
-		is_braking = value
-		_update_lighting_state()
-
-@export var headlights_on: bool = true:
-	set(value):
-		headlights_on = value
-		_update_lighting_state()
-
-var _spot_l: SpotLight3D = null
-var _spot_r: SpotLight3D = null
-
-@export var is_reversing: bool = false:
-	set(value):
-		is_reversing = value
-		_update_lighting_state()
-
-@export var hazard_lights: bool = false:
-	set(value):
-		hazard_lights = value
-		_update_lighting_state()
-
-# ==============================================================================
-# SPECIFICATIONS (BNR34 Exact Proportions in Meters)
-# ==============================================================================
-const LENGTH: float = 4.600
-const WIDTH: float = 1.785
-const HEIGHT: float = 1.360
-const WHEELBASE: float = 2.665
-const TRACK_WIDTH: float = 1.480
-
-# Coordinate system: -Z is Forward, +Z is Rear, +Y is Up, +X is Right
-const FRONT_AXLE_Z: float = -WHEELBASE * 0.5 # -1.3325m
-const REAR_AXLE_Z: float = WHEELBASE * 0.5   # +1.3325m
-const WHEEL_RADIUS: float = 0.335
-const TIRE_WIDTH: float = 0.265
-const RIM_RADIUS: float = 0.235
-
-# ==============================================================================
-# NODE ANCHORS (Exposed for Physics Controller Integration)
-# ==============================================================================
+# --- MANDATORY PHYSICS SUSPENSION ANCHORS ---
 var WheelFL: Node3D
 var WheelFR: Node3D
 var WheelRL: Node3D
 var WheelRR: Node3D
-var ChassisRoot: Node3D
 
-# ==============================================================================
-# INTERNAL MATERIALS
-# ==============================================================================
-var _mat_body: StandardMaterial3D
-var _mat_carbon_matte: StandardMaterial3D
-var _mat_glass: StandardMaterial3D
-var _mat_headlight_glass: StandardMaterial3D
+# --- EXPORTED CONFIGURATION & STATE PROPERTIES (WITH RECURSION GUARDS) ---
+@export_group("Vehicle State")
+var _is_braking: bool = false
+@export var is_braking: bool:
+	get:
+		return _is_braking
+	set(value):
+		if _is_braking == value:
+			return
+		_is_braking = value
+		_update_lighting_state()
+
+var _is_reversing: bool = false
+@export var is_reversing: bool:
+	get:
+		return _is_reversing
+	set(value):
+		if _is_reversing == value:
+			return
+		_is_reversing = value
+		_update_lighting_state()
+
+var _headlights_on: bool = true
+@export var headlights_on: bool = true:
+	get:
+		return _headlights_on
+	set(value):
+		if _headlights_on == value:
+			return
+		_headlights_on = value
+		_update_lighting_state()
+
+@export_group("Aesthetic Customization")
+var _paint_color: Color = Color(0.02, 0.28, 0.85) # Iconic Bayside Blue (TV2)
+@export var paint_color: Color = Color(0.02, 0.28, 0.85):
+	get:
+		return _paint_color
+	set(value):
+		if _paint_color == value:
+			return
+		_paint_color = value
+		if _mat_car_paint:
+			_mat_car_paint.set_shader_parameter("albedo_color", _paint_color)
+
+var _rim_color: Color = Color(0.18, 0.15, 0.12) # Nismo Satin Bronze / Gunmetal
+@export var rim_color: Color = Color(0.18, 0.15, 0.12):
+	get:
+		return _rim_color
+	set(value):
+		if _rim_color == value:
+			return
+		_rim_color = value
+		if _mat_wheel_spoke:
+			_mat_wheel_spoke.albedo_color = _rim_color
+
+@export var rebuild_trigger: bool = false:
+	set(value):
+		if value:
+			build_vehicle_mesh()
+		rebuild_trigger = false
+
+# --- CORE DIMENSIONS (METERS) ---
+const WHEELBASE: float = 2.665
+const FRONT_AXLE_Z: float = -1.3325
+const REAR_AXLE_Z: float = 1.3325
+const TRACK_WIDTH: float = 1.510
+const HALF_TRACK: float = 0.755
+const WHEEL_RADIUS: float = 0.330
+const WHEEL_WIDTH: float = 0.250
+
+# --- INTERNAL SHADER & MATERIAL REFERENCES ---
+var _mat_car_paint: ShaderMaterial
+var _mat_carbon_fiber: ShaderMaterial
+var _mat_black_trim: StandardMaterial3D
 var _mat_chrome: StandardMaterial3D
-var _mat_intercooler: StandardMaterial3D
-var _mat_rim: StandardMaterial3D
-var _mat_tire: StandardMaterial3D
-var _mat_rotor: StandardMaterial3D
-var _mat_caliper: StandardMaterial3D
-var _mat_taillight_halo: StandardMaterial3D
-var _mat_headlight_xenon: StandardMaterial3D
+var _mat_titanium_burnt: ShaderMaterial
+var _mat_glass_smoked: StandardMaterial3D
+var _mat_headlight_glass: StandardMaterial3D
+var _mat_halo_cyan: StandardMaterial3D
+var _mat_headlight_core: StandardMaterial3D
+var _mat_taillight_ring_outer: StandardMaterial3D
+var _mat_taillight_ring_inner: StandardMaterial3D
 var _mat_reverse_light: StandardMaterial3D
-var _mat_indicator_light: StandardMaterial3D
-var _mat_underglow_well: StandardMaterial3D
+var _mat_turn_signal: StandardMaterial3D
+var _mat_fmic_core: StandardMaterial3D
+var _mat_wheel_spoke: StandardMaterial3D
+var _mat_wheel_lip: StandardMaterial3D
+var _mat_tire_rubber: StandardMaterial3D
+var _mat_tire_sidewall: StandardMaterial3D
+var _mat_brembo_caliper: StandardMaterial3D
+var _mat_brake_rotor: StandardMaterial3D
+var _mat_interior_dark: StandardMaterial3D
+var _mat_recaro_red: StandardMaterial3D
+var _mat_roll_cage: StandardMaterial3D
+var _mat_mfd_screen: StandardMaterial3D
+var _mat_gauge_cluster: StandardMaterial3D
+var _mat_manga_smoke: ShaderMaterial
+var _mat_wind_streamer: ShaderMaterial
 
-var _blink_timer: float = 0.0
+# --- DYNAMIC NODE REFERENCES FOR VFX & LIGHTING ---
+var _spot_headlight_l: SpotLight3D
+var _spot_headlight_r: SpotLight3D
+var _omni_taillight_l: OmniLight3D
+var _omni_taillight_r: OmniLight3D
+var _omni_backfire: OmniLight3D
+var _particles_backfire_cyan: GPUParticles3D
+var _particles_backfire_magenta: GPUParticles3D
+var _particles_smoke_rl: GPUParticles3D
+var _particles_smoke_rr: GPUParticles3D
+var _particles_streamer_wing_l: GPUParticles3D
+var _particles_streamer_wing_r: GPUParticles3D
+var _particles_streamer_mirror_l: GPUParticles3D
+var _particles_streamer_mirror_r: GPUParticles3D
+
+var _current_brake_heat: float = 0.0
+var _backfire_timer: float = 0.0
 
 # ==============================================================================
 # LIFECYCLE
 # ==============================================================================
 func _ready() -> void:
-	generate_vehicle()
+	build_vehicle_mesh()
 
 func _process(delta: float) -> void:
-	if hazard_lights and _mat_indicator_light:
-		_blink_timer += delta * 6.0
-		var blink_on: bool = sin(_blink_timer) > 0.0
-		_mat_indicator_light.emission_energy_multiplier = 5.5 if blink_on else 0.0
+	if _backfire_timer > 0.0:
+		_backfire_timer -= delta
+		if _omni_backfire:
+			_omni_backfire.light_energy = maxf(0.0, (_backfire_timer / 0.16) * 8.5)
+		if _backfire_timer <= 0.0 and _omni_backfire:
+			_omni_backfire.visible = false
 
 # ==============================================================================
-# MASTER GENERATION PIPELINE
+# PUBLIC API
 # ==============================================================================
-func generate_vehicle() -> void:
-	_clear_existing_children()
-	_init_materials()
-
-	ChassisRoot = Node3D.new()
-	ChassisRoot.name = "ChassisRoot"
-	add_child(ChassisRoot)
-	_set_owner_safe(ChassisRoot)
-
-	# 1. Build Main Sculpted Body & Glasshouse
-	_build_chassis_body(ChassisRoot)
-
-	# 2. Build Aero Trim, Splitter, Skirts, Diffuser & Intercooler
-	_build_aero_and_trim(ChassisRoot)
-
-	# 3. Build Trunk Double-Blade GT Wing & Mirrors
-	_build_gt_wing(ChassisRoot)
-	_build_side_mirrors(ChassisRoot)
-
-	# 4. Build Exhaust Cannon
-	_build_exhaust_system(ChassisRoot)
-
-	# 5. Build Signature R34 Lighting (Quad Halos + Projectors)
-	_build_lighting_assemblies(ChassisRoot)
-
-	# 6. Build 4 Corner Wheels & Running Gear
-	WheelFL = _create_wheel_anchor("WheelFL", Vector3(-TRACK_WIDTH * 0.5, WHEEL_RADIUS, FRONT_AXLE_Z), true, true)
-	WheelFR = _create_wheel_anchor("WheelFR", Vector3(TRACK_WIDTH * 0.5, WHEEL_RADIUS, FRONT_AXLE_Z), false, true)
-	WheelRL = _create_wheel_anchor("WheelRL", Vector3(-TRACK_WIDTH * 0.5, WHEEL_RADIUS, REAR_AXLE_Z), true, false)
-	WheelRR = _create_wheel_anchor("WheelRR", Vector3(TRACK_WIDTH * 0.5, WHEEL_RADIUS, REAR_AXLE_Z), false, false)
-
-	_update_lighting_state()
-
-func _clear_existing_children() -> void:
+func build_vehicle_mesh() -> Node3D:
+	# Clean all existing procedural children safely
 	for child in get_children():
 		remove_child(child)
 		child.queue_free()
 
-func _set_owner_safe(node: Node) -> void:
-	if Engine.is_editor_hint() and is_inside_tree() and get_tree().edited_scene_root:
-		node.owner = get_tree().edited_scene_root
+	_init_materials_and_shaders()
+
+	var chassis_root := Node3D.new()
+	chassis_root.name = "ChassisRoot"
+	add_child(chassis_root)
+
+	# 1. Build Lofted Nismo Z-Tune Unibody & Blister Fenders
+	_build_body_shell(chassis_root)
+
+	# 2. Build Z-Tune Carbon Aero, Vented Hood, FMIC, Diffuser, & GT Wing
+	_build_aero_and_details(chassis_root)
+
+	# 3. Build Cyber Neon "Godzilla Eyes" Headlights & Angel Eye Halos
+	_build_headlights(chassis_root)
+
+	# 4. Build Iconic Quad Round "Godzilla" Taillights
+	_build_taillights(chassis_root)
+
+	# 5. Build RHD Japanese Spec Cockpit, MFD Telemetry, & Cusco Roll Cage
+	_build_rhd_interior(chassis_root)
+
+	# 6. Build 4 Nismo LMGT4 Wheels & Brembo Brake Assemblies
+	WheelFL = _build_wheel_assembly("WheelFL", Vector3(-HALF_TRACK, WHEEL_RADIUS, FRONT_AXLE_Z), true, true)
+	WheelFR = _build_wheel_assembly("WheelFR", Vector3(HALF_TRACK, WHEEL_RADIUS, FRONT_AXLE_Z), false, true)
+	WheelRL = _build_wheel_assembly("WheelRL", Vector3(-HALF_TRACK, WHEEL_RADIUS, REAR_AXLE_Z), true, false)
+	WheelRR = _build_wheel_assembly("WheelRR", Vector3(HALF_TRACK, WHEEL_RADIUS, REAR_AXLE_Z), false, false)
+
+	add_child(WheelFL)
+	add_child(WheelFR)
+	add_child(WheelRL)
+	add_child(WheelRR)
+
+	# 7. Build Exhaust & Authentic Anime VFX Systems
+	_build_exhaust_and_vfx(chassis_root)
+
+	# Synchronize initial states
+	_update_lighting_state()
+	set_brake_heat(0.0)
+	set_drift_vfx(false, 0.0)
+
+	return self
+
+func set_brake_heat(heat: float) -> void:
+	_current_brake_heat = clampf(heat, 0.0, 1.0)
+	if _mat_brake_rotor:
+		var glow_factor: float = pow(_current_brake_heat, 1.7) * 7.0
+		var base_iron := Color(0.24, 0.25, 0.27)
+		var hot_cherry := Color(1.0, 0.18, 0.02)
+		_mat_brake_rotor.albedo_color = base_iron.lerp(Color(0.55, 0.15, 0.08), _current_brake_heat)
+		_mat_brake_rotor.emission_enabled = _current_brake_heat > 0.02
+		_mat_brake_rotor.emission = hot_cherry
+		_mat_brake_rotor.emission_energy_multiplier = glow_factor
+	_update_lighting_state()
+
+func trigger_backfire() -> void:
+	if _particles_backfire_cyan:
+		_particles_backfire_cyan.restart()
+		_particles_backfire_cyan.emitting = true
+	if _particles_backfire_magenta:
+		_particles_backfire_magenta.restart()
+		_particles_backfire_magenta.emitting = true
+	if _omni_backfire:
+		_omni_backfire.visible = true
+		_omni_backfire.light_energy = 8.5
+	_backfire_timer = 0.16
+
+func set_drift_vfx(is_drifting: bool, speed_kmh: float = 100.0) -> void:
+	if _particles_smoke_rl:
+		_particles_smoke_rl.emitting = is_drifting
+	if _particles_smoke_rr:
+		_particles_smoke_rr.emitting = is_drifting
+
+	var active_streamers: bool = (is_drifting and speed_kmh > 45.0) or (speed_kmh >= 90.0)
+	if _particles_streamer_wing_l:
+		_particles_streamer_wing_l.emitting = active_streamers
+	if _particles_streamer_wing_r:
+		_particles_streamer_wing_r.emitting = active_streamers
+	if _particles_streamer_mirror_l:
+		_particles_streamer_mirror_l.emitting = active_streamers
+	if _particles_streamer_mirror_r:
+		_particles_streamer_mirror_r.emitting = active_streamers
 
 # ==============================================================================
-# 4. MULTI-LAYER REALISTIC JDM CAR PAINT & PBR MATERIALS
+# LIGHTING STATE UPDATER
 # ==============================================================================
-func _init_materials() -> void:
-	# Bayside Blue Metallic Clearcoat Paint
-	_mat_body = StandardMaterial3D.new()
-	_mat_body.name = "BaysideBlue_Paint"
-	_mat_body.albedo_color = body_color
-	_mat_body.metallic = 0.90
-	_mat_body.metallic_specular = 0.75
-	_mat_body.roughness = 0.18
-	_mat_body.clearcoat_enabled = true
-	_mat_body.clearcoat = 1.0
-	_mat_body.clearcoat_roughness = 0.05
-	_mat_body.cull_mode = BaseMaterial3D.CULL_DISABLED
-
-	# Matte Black Trim (Splitter, Diffuser, Pillars, Wiper Cowl)
-	_mat_carbon_matte = StandardMaterial3D.new()
-	_mat_carbon_matte.name = "MatteBlack_Trim"
-	_mat_carbon_matte.albedo_color = Color(0.06, 0.06, 0.07, 1.0)
-	_mat_carbon_matte.metallic = 0.15
-	_mat_carbon_matte.roughness = 0.78
-	_mat_carbon_matte.cull_mode = BaseMaterial3D.CULL_DISABLED
-
-	# Tinted Tempered Glass
-	_mat_glass = StandardMaterial3D.new()
-	_mat_glass.name = "Tempered_Glass"
-	_mat_glass.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_mat_glass.albedo_color = Color(0.05, 0.08, 0.11, 0.25)
-	_mat_glass.metallic = 0.85
-	_mat_glass.roughness = 0.06
-	_mat_glass.clearcoat_enabled = true
-	_mat_glass.clearcoat = 1.0
-	_mat_glass.clearcoat_roughness = 0.02
-	_mat_glass.cull_mode = BaseMaterial3D.CULL_DISABLED
-
-	# Clear Polycarbonate Headlight Lens
-	_mat_headlight_glass = StandardMaterial3D.new()
-	_mat_headlight_glass.name = "Headlight_Lens"
-	_mat_headlight_glass.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_mat_headlight_glass.albedo_color = Color(0.85, 0.92, 1.0, 0.18)
-	_mat_headlight_glass.metallic = 0.9
-	_mat_headlight_glass.roughness = 0.03
-
-	# Chrome Exhaust & Projector Bezel
-	_mat_chrome = StandardMaterial3D.new()
-	_mat_chrome.name = "JDM_Chrome"
-	_mat_chrome.albedo_color = Color(0.92, 0.94, 0.98, 1.0)
-	_mat_chrome.metallic = 1.0
-	_mat_chrome.roughness = 0.06
-
-	# Front-Mount Intercooler Core (Brushed Aluminum Fins)
-	_mat_intercooler = StandardMaterial3D.new()
-	_mat_intercooler.name = "Aluminum_Intercooler"
-	_mat_intercooler.albedo_color = Color(0.68, 0.72, 0.76, 1.0)
-	_mat_intercooler.metallic = 0.85
-	_mat_intercooler.roughness = 0.35
-
-	# Nismo Alloy Rims
-	_mat_rim = StandardMaterial3D.new()
-	_mat_rim.name = "Nismo_Alloy"
-	_mat_rim.albedo_color = rim_color
-	_mat_rim.metallic = 0.88
-	_mat_rim.roughness = 0.22
-	_mat_rim.clearcoat_enabled = true
-	_mat_rim.clearcoat = 0.6
-
-	# High-Performance Rubber Tire
-	_mat_tire = StandardMaterial3D.new()
-	_mat_tire.name = "Potenza_Rubber"
-	_mat_tire.albedo_color = Color(0.08, 0.08, 0.09, 1.0)
-	_mat_tire.metallic = 0.05
-	_mat_tire.roughness = 0.86
-
-	# Drilled Steel Brake Rotor
-	_mat_rotor = StandardMaterial3D.new()
-	_mat_rotor.name = "Drilled_Steel_Rotor"
-	_mat_rotor.albedo_color = Color(0.55, 0.57, 0.60, 1.0)
-	_mat_rotor.metallic = 0.92
-	_mat_rotor.roughness = 0.28
-
-	# Golden Brembo Brake Caliper
-	_mat_caliper = StandardMaterial3D.new()
-	_mat_caliper.name = "Brembo_Gold"
-	_mat_caliper.albedo_color = Color(0.85, 0.58, 0.08, 1.0)
-	_mat_caliper.metallic = 0.85
-	_mat_caliper.roughness = 0.20
-	_mat_caliper.clearcoat_enabled = true
-	_mat_caliper.clearcoat = 0.9
-
-	# Wheel Arch Blackout Lining
-	_mat_underglow_well = StandardMaterial3D.new()
-	_mat_underglow_well.name = "WheelWell_Liner"
-	_mat_underglow_well.albedo_color = Color(0.02, 0.02, 0.02, 1.0)
-	_mat_underglow_well.roughness = 0.95
-
-	# Emissive Taillight Halo (Vulkan Glow > 4.0)
-	_mat_taillight_halo = StandardMaterial3D.new()
-	_mat_taillight_halo.name = "Taillight_Halo_Emissive"
-	_mat_taillight_halo.albedo_color = Color(0.9, 0.05, 0.05, 1.0)
-	_mat_taillight_halo.emission_enabled = true
-	_mat_taillight_halo.emission = Color(1.0, 0.04, 0.02, 1.0)
-	_mat_taillight_halo.emission_energy_multiplier = 4.5
-
-	# Emissive Xenon Headlight & DRL
-	_mat_headlight_xenon = StandardMaterial3D.new()
-	_mat_headlight_xenon.name = "Headlight_Xenon_Emissive"
-	_mat_headlight_xenon.albedo_color = Color(0.9, 0.96, 1.0, 1.0)
-	_mat_headlight_xenon.emission_enabled = true
-	_mat_headlight_xenon.emission = Color(0.78, 0.90, 1.0, 1.0)
-	_mat_headlight_xenon.emission_energy_multiplier = 5.2
-
-	# Emissive Reverse Lights
-	_mat_reverse_light = StandardMaterial3D.new()
-	_mat_reverse_light.name = "Reverse_Emissive"
-	_mat_reverse_light.albedo_color = Color(0.85, 0.85, 0.9, 1.0)
-	_mat_reverse_light.emission_enabled = true
-	_mat_reverse_light.emission = Color(0.95, 0.95, 1.0, 1.0)
-	_mat_reverse_light.emission_energy_multiplier = 0.0
-
-	# Emissive Amber Turn Indicators
-	_mat_indicator_light = StandardMaterial3D.new()
-	_mat_indicator_light.name = "Indicator_Amber"
-	_mat_indicator_light.albedo_color = Color(0.95, 0.45, 0.02, 1.0)
-	_mat_indicator_light.emission_enabled = true
-	_mat_indicator_light.emission = Color(1.0, 0.42, 0.0, 1.0)
-	_mat_indicator_light.emission_energy_multiplier = 0.8
-
 func _update_lighting_state() -> void:
-	if _mat_taillight_halo:
-		if is_braking:
-			_mat_taillight_halo.emission = Color(1.0, 0.08, 0.04, 1.0)
-			_mat_taillight_halo.emission_energy_multiplier = 9.5 # Intense stoplight red
-		else:
-			_mat_taillight_halo.emission = Color(1.0, 0.03, 0.01, 1.0)
-			_mat_taillight_halo.emission_energy_multiplier = 4.5 # Running halo glow
+	# Headlights & Cyber Angel Eye Halos
+	if _mat_halo_cyan:
+		_mat_halo_cyan.emission_energy_multiplier = 7.2 if _headlights_on else 1.2
+	if _mat_headlight_core:
+		_mat_headlight_core.emission_energy_multiplier = 6.0 if _headlights_on else 0.0
+	if _spot_headlight_l:
+		_spot_headlight_l.visible = _headlights_on
+	if _spot_headlight_r:
+		_spot_headlight_r.visible = _headlights_on
 
-	if _mat_headlight_xenon:
-		_mat_headlight_xenon.emission_energy_multiplier = 5.5 if headlights_on else 0.4
-	if _spot_l:
-		_spot_l.visible = headlights_on
-	if _spot_r:
-		_spot_r.visible = headlights_on
+	# Godzilla Quad Round Taillights
+	var brake_active: bool = _is_braking or (_current_brake_heat > 0.35)
+	var heat_boost: float = _current_brake_heat * 2.5
+	var outer_energy: float = (8.5 + heat_boost) if brake_active else (3.2 if _headlights_on else 1.2)
+	var inner_energy: float = (7.5 + heat_boost) if brake_active else (2.6 if _headlights_on else 0.9)
 
+	if _mat_taillight_ring_outer:
+		_mat_taillight_ring_outer.emission_energy_multiplier = outer_energy
+	if _mat_taillight_ring_inner:
+		_mat_taillight_ring_inner.emission_energy_multiplier = inner_energy
+
+	if _omni_taillight_l:
+		_omni_taillight_l.light_energy = 2.8 if brake_active else 0.8
+	if _omni_taillight_r:
+		_omni_taillight_r.light_energy = 2.8 if brake_active else 0.8
+
+	# Kouki Reverse Lights
 	if _mat_reverse_light:
-		_mat_reverse_light.emission_energy_multiplier = 4.5 if is_reversing else 0.0
-
-	if _mat_indicator_light and not hazard_lights:
-		_mat_indicator_light.emission_energy_multiplier = 0.8
+		_mat_reverse_light.emission_enabled = _is_reversing
+		_mat_reverse_light.emission_energy_multiplier = 5.0 if _is_reversing else 0.0
 
 # ==============================================================================
-# 1. GEOMETRIC SILHOUETTE: LOFTED WIDEBODY CHASSIS & GLASSHOUSE
+# SHADERS, MATERIALS & PROCEDURAL SUBVIEWPORT TEXTURES
 # ==============================================================================
-# Cross-section stations along the Z axis (-2.30m Front to +2.30m Rear)
-# Each station defines:
-# [z, bottom_y, belt_y, deck_y, cabin_top_y, half_width_bottom, half_width_fender, half_width_deck, half_width_cabin, is_glass]
-func _get_body_stations() -> Array:
-	return [
-		# Front Bumper Nose & Lip
-		[-2.30, 0.14, 0.46, 0.62, 0.62, 0.76, 0.81, 0.72, 0.56, false],
-		[-2.18, 0.13, 0.50, 0.69, 0.69, 0.82, 0.86, 0.78, 0.64, false],
-		# Front Wheel Arch & Widebody Blister Fender (-1.70 to -0.95)
-		[-1.72, 0.15, 0.56, 0.74, 0.74, 0.85, 0.892, 0.81, 0.68, false],
-		[-1.33, 0.22, 0.62, 0.78, 0.78, 0.86, 0.892, 0.82, 0.70, false],
-		[-0.94, 0.14, 0.60, 0.81, 0.81, 0.85, 0.892, 0.81, 0.71, false],
-		# Base of Windshield / Wiper Cowl
-		[-0.78, 0.14, 0.60, 0.84, 0.84, 0.84, 0.865, 0.80, 0.72, false],
-		# A-Pillar Rise to Front Roof Header (Glasshouse active)
-		[-0.22, 0.14, 0.62, 0.87, 1.33, 0.84, 0.860, 0.79, 0.63, true],
-		# Mid-Cabin / B-Pillar Peak (Height: 1.36m)
-		[ 0.35, 0.14, 0.64, 0.89, 1.36, 0.84, 0.865, 0.80, 0.63, true],
-		# Rear Roof Header / C-Pillar Top
-		[ 0.82, 0.14, 0.66, 0.91, 1.32, 0.85, 0.885, 0.82, 0.61, true],
-		# Base of Rear Window / Rear Quarter Widebody Swell Begins
-		[ 0.98, 0.15, 0.67, 0.92, 1.24, 0.86, 0.892, 0.83, 0.64, true],
-		# Rear Widebody Fender Arch (+0.98 to +1.70)
-		[ 1.33, 0.22, 0.68, 0.94, 0.94, 0.86, 0.892, 0.83, 0.72, false],
-		[ 1.72, 0.16, 0.66, 0.93, 0.93, 0.85, 0.892, 0.81, 0.70, false],
-		# Trunk Deck & Muscular Rear Haunches
-		[ 2.15, 0.20, 0.62, 0.90, 0.90, 0.81, 0.855, 0.77, 0.66, false],
-		# Flat Iconic R34 Tailgate Fascia
-		[ 2.30, 0.24, 0.60, 0.88, 0.88, 0.76, 0.810, 0.74, 0.62, false]
+func _init_materials_and_shaders() -> void:
+	# 1. Manga Inverted-Hull Ink Outline Shader (Next Pass)
+	var outline_shader := Shader.new()
+	outline_shader.code = """
+shader_type spatial;
+render_mode cull_front, unshaded;
+
+uniform vec4 ink_color : source_color = vec4(0.03, 0.04, 0.07, 1.0);
+uniform float outline_width : hint_range(0.0, 0.03) = 0.0085;
+
+void vertex() {
+	VERTEX += NORMAL * outline_width;
+}
+
+void fragment() {
+	ALBEDO = ink_color.rgb;
+}
+"""
+	var mat_ink_outline := ShaderMaterial.new()
+	mat_ink_outline.shader = outline_shader
+
+	# 2. Cel-Shaded Anime Car Paint Shader with Touge Cyan Fresnel Rim
+	var paint_shader := Shader.new()
+	paint_shader.code = """
+shader_type spatial;
+render_mode diffuse_toon, specular_toon;
+
+uniform vec4 albedo_color : source_color = vec4(0.02, 0.28, 0.85, 1.0);
+uniform vec4 rim_color : source_color = vec4(0.0, 0.92, 1.0, 1.0);
+uniform float rim_power : hint_range(0.5, 8.0) = 3.2;
+uniform float rim_intensity : hint_range(0.0, 5.0) = 1.65;
+
+void fragment() {
+	float fresnel = pow(1.0 - clamp(dot(NORMAL, VIEW), 0.0, 1.0), rim_power);
+	float cel_rim = smoothstep(0.42, 0.48, fresnel);
+	ALBEDO = albedo_color.rgb;
+	METALLIC = 0.72;
+	ROUGHNESS = 0.18;
+	SPECULAR = 0.85;
+	EMISSION = rim_color.rgb * (cel_rim * rim_intensity + fresnel * 0.35);
+}
+"""
+	_mat_car_paint = ShaderMaterial.new()
+	_mat_car_paint.shader = paint_shader
+	_mat_car_paint.set_shader_parameter("albedo_color", _paint_color)
+	_mat_car_paint.next_pass = mat_ink_outline
+
+	# 3. Carbon Fiber Weave Shader (with Subtle Outline)
+	var carbon_shader := Shader.new()
+	carbon_shader.code = """
+shader_type spatial;
+render_mode diffuse_toon, specular_toon;
+
+varying vec3 local_pos;
+
+void vertex() {
+	local_pos = VERTEX;
+}
+
+void fragment() {
+	vec2 uv_weave = (local_pos.xz + local_pos.xy) * 95.0;
+	float diag = sin(uv_weave.x + uv_weave.y) * cos(uv_weave.x - uv_weave.y);
+	float weave_step = step(0.0, diag);
+	vec3 c1 = vec3(0.07, 0.08, 0.10);
+	vec3 c2 = vec3(0.14, 0.16, 0.19);
+	float fresnel = pow(1.0 - clamp(dot(NORMAL, VIEW), 0.0, 1.0), 3.8);
+	ALBEDO = mix(c1, c2, weave_step);
+	METALLIC = 0.45;
+	ROUGHNESS = mix(0.22, 0.38, weave_step);
+	EMISSION = vec3(0.0, 0.55, 0.75) * smoothstep(0.55, 0.65, fresnel) * 0.4;
+}
+"""
+	_mat_carbon_fiber = ShaderMaterial.new()
+	_mat_carbon_fiber.shader = carbon_shader
+	_mat_carbon_fiber.next_pass = mat_ink_outline
+
+	# 4. Heat-Burnt Titanium Exhaust Tip Shader
+	var ti_shader := Shader.new()
+	ti_shader.code = """
+shader_type spatial;
+
+varying float z_coord;
+void vertex() {
+	z_coord = VERTEX.y;
+}
+void fragment() {
+	float t = clamp((z_coord + 0.12) / 0.24, 0.0, 1.0);
+	vec3 silver = vec3(0.78, 0.80, 0.84);
+	vec3 gold = vec3(0.85, 0.65, 0.20);
+	vec3 purple = vec3(0.55, 0.15, 0.75);
+	vec3 cyan_blue = vec3(0.05, 0.55, 0.98);
+	vec3 col = mix(silver, gold, smoothstep(0.1, 0.4, t));
+	col = mix(col, purple, smoothstep(0.4, 0.7, t));
+	col = mix(col, cyan_blue, smoothstep(0.7, 0.95, t));
+	ALBEDO = col;
+	METALLIC = 0.92;
+	ROUGHNESS = 0.15;
+}
+"""
+	_mat_titanium_burnt = ShaderMaterial.new()
+	_mat_titanium_burnt.shader = ti_shader
+
+	# 5. Standard & Emissive Materials
+	_mat_black_trim = StandardMaterial3D.new()
+	_mat_black_trim.albedo_color = Color(0.06, 0.065, 0.08)
+	_mat_black_trim.roughness = 0.65
+	_mat_black_trim.metallic = 0.2
+
+	_mat_chrome = StandardMaterial3D.new()
+	_mat_chrome.albedo_color = Color(0.88, 0.91, 0.96)
+	_mat_chrome.metallic = 0.95
+	_mat_chrome.roughness = 0.12
+
+	_mat_glass_smoked = StandardMaterial3D.new()
+	_mat_glass_smoked.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_mat_glass_smoked.albedo_color = Color(0.04, 0.07, 0.12, 0.48)
+	_mat_glass_smoked.metallic = 0.85
+	_mat_glass_smoked.roughness = 0.06
+	_mat_glass_smoked.cull_mode = BaseMaterial3D.CULL_DISABLED
+
+	_mat_headlight_glass = StandardMaterial3D.new()
+	_mat_headlight_glass.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_mat_headlight_glass.albedo_color = Color(0.75, 0.92, 1.0, 0.26)
+	_mat_headlight_glass.metallic = 0.9
+	_mat_headlight_glass.roughness = 0.04
+
+	# Cyber Angel Eye Halos (> 5.5 emission energy)
+	_mat_halo_cyan = StandardMaterial3D.new()
+	_mat_halo_cyan.albedo_color = Color("#00F3FF")
+	_mat_halo_cyan.emission_enabled = true
+	_mat_halo_cyan.emission = Color("#00F3FF")
+	_mat_halo_cyan.emission_energy_multiplier = 7.2
+
+	_mat_headlight_core = StandardMaterial3D.new()
+	_mat_headlight_core.albedo_color = Color("#F0F8FF")
+	_mat_headlight_core.emission_enabled = true
+	_mat_headlight_core.emission = Color("#F0F8FF")
+	_mat_headlight_core.emission_energy_multiplier = 6.0
+
+	# Godzilla Quad Taillight Crimson Halos
+	_mat_taillight_ring_outer = StandardMaterial3D.new()
+	_mat_taillight_ring_outer.albedo_color = Color(1.0, 0.04, 0.12)
+	_mat_taillight_ring_outer.emission_enabled = true
+	_mat_taillight_ring_outer.emission = Color(1.0, 0.04, 0.12)
+	_mat_taillight_ring_outer.emission_energy_multiplier = 3.5
+
+	_mat_taillight_ring_inner = StandardMaterial3D.new()
+	_mat_taillight_ring_inner.albedo_color = Color(1.0, 0.05, 0.14)
+	_mat_taillight_ring_inner.emission_enabled = true
+	_mat_taillight_ring_inner.emission = Color(1.0, 0.05, 0.14)
+	_mat_taillight_ring_inner.emission_energy_multiplier = 2.8
+
+	_mat_reverse_light = StandardMaterial3D.new()
+	_mat_reverse_light.albedo_color = Color(0.92, 0.96, 1.0)
+	_mat_reverse_light.emission_enabled = false
+	_mat_reverse_light.emission = Color(0.95, 0.98, 1.0)
+
+	_mat_turn_signal = StandardMaterial3D.new()
+	_mat_turn_signal.albedo_color = Color(1.0, 0.48, 0.0)
+	_mat_turn_signal.emission_enabled = true
+	_mat_turn_signal.emission = Color(1.0, 0.42, 0.0)
+	_mat_turn_signal.emission_energy_multiplier = 1.6
+
+	_mat_fmic_core = StandardMaterial3D.new()
+	_mat_fmic_core.albedo_color = Color(0.68, 0.72, 0.78)
+	_mat_fmic_core.metallic = 0.88
+	_mat_fmic_core.roughness = 0.32
+
+	_mat_wheel_spoke = StandardMaterial3D.new()
+	_mat_wheel_spoke.albedo_color = _rim_color
+	_mat_wheel_spoke.metallic = 0.78
+	_mat_wheel_spoke.roughness = 0.28
+
+	_mat_wheel_lip = StandardMaterial3D.new()
+	_mat_wheel_lip.albedo_color = Color(0.90, 0.92, 0.95)
+	_mat_wheel_lip.metallic = 0.96
+	_mat_wheel_lip.roughness = 0.10
+
+	_mat_tire_rubber = StandardMaterial3D.new()
+	_mat_tire_rubber.albedo_color = Color(0.08, 0.085, 0.095)
+	_mat_tire_rubber.roughness = 0.86
+
+	_mat_brembo_caliper = StandardMaterial3D.new()
+	_mat_brembo_caliper.albedo_color = Color(0.88, 0.62, 0.05) # Nismo Gold Brembo F50
+	_mat_brembo_caliper.metallic = 0.65
+	_mat_brembo_caliper.roughness = 0.24
+
+	_mat_brake_rotor = StandardMaterial3D.new()
+	_mat_brake_rotor.albedo_color = Color(0.24, 0.25, 0.27)
+	_mat_brake_rotor.metallic = 0.82
+	_mat_brake_rotor.roughness = 0.36
+
+	_mat_interior_dark = StandardMaterial3D.new()
+	_mat_interior_dark.albedo_color = Color(0.09, 0.10, 0.12)
+	_mat_interior_dark.roughness = 0.78
+
+	_mat_recaro_red = StandardMaterial3D.new()
+	_mat_recaro_red.albedo_color = Color(0.68, 0.06, 0.10)
+	_mat_recaro_red.roughness = 0.72
+
+	_mat_roll_cage = StandardMaterial3D.new()
+	_mat_roll_cage.albedo_color = Color(0.0, 0.72, 0.92) # Cusco Metallic Cyan
+	_mat_roll_cage.metallic = 0.75
+	_mat_roll_cage.roughness = 0.22
+
+	# 6. Procedural SubViewport Textures (MFD, Gauge Cluster, Tire Stencil)
+	_build_procedural_subviewport_materials()
+
+	# 7. Manga Tire Smoke & Wind Streamer Shaders
+	var smoke_shader := Shader.new()
+	smoke_shader.code = """
+shader_type spatial;
+render_mode diffuse_toon, specular_disabled;
+
+void fragment() {
+	float edge = dot(NORMAL, VIEW);
+	float ink = step(0.26, edge);
+	vec3 smoke_col = vec3(0.92, 0.95, 1.0);
+	vec3 outline_col = vec3(0.08, 0.12, 0.18);
+	ALBEDO = mix(outline_col, smoke_col, ink);
+	EMISSION = mix(vec3(0.0), vec3(0.12, 0.22, 0.32), ink);
+}
+"""
+	_mat_manga_smoke = ShaderMaterial.new()
+	_mat_manga_smoke.shader = smoke_shader
+
+	var streamer_shader := Shader.new()
+	streamer_shader.code = """
+shader_type spatial;
+render_mode unshaded, cull_disabled, blend_add;
+
+void fragment() {
+	ALBEDO = vec3(0.0, 0.95, 1.0);
+	EMISSION = vec3(0.0, 0.95, 1.0) * 4.5;
+	ALPHA = 0.75;
+}
+"""
+	_mat_wind_streamer = ShaderMaterial.new()
+	_mat_wind_streamer.shader = streamer_shader
+
+func _build_procedural_subviewport_materials() -> void:
+	var vp_holder := Node.new()
+	vp_holder.name = "ProceduralViewports"
+	add_child(vp_holder)
+
+	# --- A. R34 MFD Telemetry Display SubViewport ---
+	var vp_mfd := SubViewport.new()
+	vp_mfd.size = Vector2i(256, 160)
+	vp_mfd.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	vp_mfd.transparent_bg = false
+	vp_holder.add_child(vp_mfd)
+
+	var mfd_bg := ColorRect.new()
+	mfd_bg.color = Color(0.01, 0.06, 0.14)
+	mfd_bg.size = Vector2(256, 160)
+	vp_mfd.add_child(mfd_bg)
+
+	# Header bar
+	var mfd_header := ColorRect.new()
+	mfd_header.color = Color(0.0, 0.85, 1.0)
+	mfd_header.position = Vector2(8, 8)
+	mfd_header.size = Vector2(240, 18)
+	vp_mfd.add_child(mfd_header)
+
+	# 3 Telemetry Bar Graphs (BOOST, OIL TEMP, THROTTLE)
+	var bar_heights := [95.0, 72.0, 108.0]
+	var bar_colors := [Color("#00F3FF"), Color("#00D8FF"), Color("#FF2A6D")]
+	for i in range(3):
+		var frame := ColorRect.new()
+		frame.color = Color(0.05, 0.22, 0.38)
+		frame.position = Vector2(20 + i * 76, 36)
+		frame.size = Vector2(56, 112)
+		vp_mfd.add_child(frame)
+
+		var fill := ColorRect.new()
+		fill.color = bar_colors[i]
+		fill.position = Vector2(24 + i * 76, 36 + (112 - bar_heights[i]))
+		fill.size = Vector2(48, bar_heights[i] - 4)
+		vp_mfd.add_child(fill)
+
+	_mat_mfd_screen = StandardMaterial3D.new()
+	_mat_mfd_screen.albedo_texture = vp_mfd.get_texture()
+	_mat_mfd_screen.emission_enabled = true
+	_mat_mfd_screen.emission_texture = vp_mfd.get_texture()
+	_mat_mfd_screen.emission_energy_multiplier = 3.2
+
+	# --- B. Nismo 320 km/h White-Face Gauge Cluster SubViewport ---
+	var vp_gauge := SubViewport.new()
+	vp_gauge.size = Vector2i(256, 128)
+	vp_gauge.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	vp_holder.add_child(vp_gauge)
+
+	var gauge_bg := ColorRect.new()
+	gauge_bg.color = Color(0.04, 0.05, 0.08)
+	gauge_bg.size = Vector2(256, 128)
+	vp_gauge.add_child(gauge_bg)
+
+	for g in range(2):
+		var dial := ColorRect.new()
+		dial.color = Color(0.92, 0.95, 0.98)
+		dial.position = Vector2(22 + g * 116, 18)
+		dial.size = Vector2(92, 92)
+		vp_gauge.add_child(dial)
+
+		var needle := ColorRect.new()
+		needle.color = Color(1.0, 0.12, 0.18)
+		needle.position = Vector2(64 + g * 116, 34)
+		needle.size = Vector2(6, 46)
+		needle.rotation = 0.65 if g == 0 else -0.45
+		vp_gauge.add_child(needle)
+
+	_mat_gauge_cluster = StandardMaterial3D.new()
+	_mat_gauge_cluster.albedo_texture = vp_gauge.get_texture()
+	_mat_gauge_cluster.emission_enabled = true
+	_mat_gauge_cluster.emission_texture = vp_gauge.get_texture()
+	_mat_gauge_cluster.emission_energy_multiplier = 2.4
+
+	# --- C. Tire Sidewall Stencil ("POTENZA RE-71RS / ADVAN RACING") ---
+	var vp_tire := SubViewport.new()
+	vp_tire.size = Vector2i(512, 512)
+	vp_tire.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	vp_tire.transparent_bg = true
+	vp_holder.add_child(vp_tire)
+
+	var tire_canvas := Control.new()
+	tire_canvas.custom_minimum_size = Vector2(512, 512)
+	vp_tire.add_child(tire_canvas)
+
+	# Stencil Arc Blocks representing "POTENZA RE-71RS" & "NISMO LMGT4"
+	var center := Vector2(256, 256)
+	var radius := 208.0
+	for s in range(2):
+		var base_angle: float = s * PI
+		for c in range(14):
+			var ang: float = base_angle - 0.65 + float(c) * 0.095
+			var pos := center + Vector2(cos(ang), sin(ang)) * radius
+			var letter_block := ColorRect.new()
+			letter_block.color = Color(0.95, 0.97, 1.0, 0.95) if c != 7 else Color(1.0, 0.15, 0.2, 0.95)
+			letter_block.size = Vector2(11, 18)
+			letter_block.position = pos - letter_block.size * 0.5
+			letter_block.rotation = ang + PI * 0.5
+			tire_canvas.add_child(letter_block)
+
+	_mat_tire_sidewall = StandardMaterial3D.new()
+	_mat_tire_sidewall.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_mat_tire_sidewall.albedo_texture = vp_tire.get_texture()
+	_mat_tire_sidewall.roughness = 0.75
+	_mat_tire_sidewall.cull_mode = BaseMaterial3D.CULL_DISABLED
+
+# ==============================================================================
+# 1. LOFTED BNR34 BODY SHELL, GREENHOUSE & Z-TUNE BLISTER FENDERS
+# ==============================================================================
+func _build_body_shell(parent: Node3D) -> void:
+	var body_node := Node3D.new()
+	body_node.name = "BodyShell"
+	parent.add_child(body_node)
+
+	# Cross-sectional stations from Front (-Z) to Rear (+Z)
+	# Format: [z, y_bottom, half_w_bottom, y_mid_flare, half_w_mid, y_beltline, half_w_belt, y_roof, half_w_roof]
+	var stations: Array = [
+		[-2.29, 0.15, 0.76, 0.44, 0.83, 0.69, 0.79, 0.69, 0.79], # 0: Front bumper nose
+		[-2.14, 0.15, 0.84, 0.47, 0.88, 0.73, 0.83, 0.73, 0.83], # 1: Headlight housing plane
+		[-1.68, 0.14, 0.87, 0.54, 0.92, 0.78, 0.85, 0.78, 0.85], # 2: Front Z-Tune arch lead
+		[-1.33, 0.16, 0.88, 0.59, 0.94, 0.81, 0.86, 0.81, 0.86], # 3: Front axle blister peak
+		[-0.95, 0.14, 0.87, 0.54, 0.91, 0.83, 0.85, 0.83, 0.85], # 4: Z-Tune fender vent exit
+		[-0.78, 0.14, 0.85, 0.51, 0.88, 0.85, 0.84, 0.85, 0.84], # 5: Base of A-pillar / cowl
+		[-0.26, 0.14, 0.85, 0.51, 0.88, 0.87, 0.84, 1.34, 0.66], # 6: Windshield header
+		[ 0.38, 0.14, 0.85, 0.52, 0.89, 0.88, 0.84, 1.36, 0.65], # 7: B-pillar / roof peak
+		[ 0.94, 0.14, 0.87, 0.56, 0.92, 0.90, 0.85, 1.31, 0.63], # 8: Rear C-pillar header
+		[ 1.33, 0.17, 0.88, 0.61, 0.94, 0.92, 0.86, 0.92, 0.86], # 9: Rear axle blister peak
+		[ 1.72, 0.18, 0.87, 0.56, 0.91, 0.91, 0.84, 0.91, 0.84], # 10: Rear quarter arch trail
+		[ 2.18, 0.22, 0.83, 0.53, 0.86, 0.89, 0.80, 0.89, 0.80], # 11: Trunk deck edge
+		[ 2.30, 0.25, 0.79, 0.52, 0.82, 0.86, 0.77, 0.86, 0.77]  # 12: Rear taillight panel
 	]
 
-func _build_chassis_body(parent: Node3D) -> void:
-	var stations: Array = _get_body_stations()
 	var st_paint := SurfaceTool.new()
 	st_paint.begin(Mesh.PRIMITIVE_TRIANGLES)
 
+	for i in range(stations.size() - 1):
+		var s0: Array = stations[i]
+		var s1: Array = stations[i + 1]
+		var z0: float = s0[0]
+		var z1: float = s1[0]
+
+		# Right side lower body panel (bottom -> mid flare)
+		_add_quad(st_paint,
+			Vector3(s0[2], s0[1], z0), Vector3(s1[2], s1[1], z1),
+			Vector3(s1[4], s1[3], z1), Vector3(s0[4], s0[3], z0))
+		# Right side upper blister fender (mid flare -> beltline)
+		_add_quad(st_paint,
+			Vector3(s0[4], s0[3], z0), Vector3(s1[4], s1[3], z1),
+			Vector3(s1[6], s1[5], z1), Vector3(s0[6], s0[5], z0))
+
+		# Left side lower body panel
+		_add_quad(st_paint,
+			Vector3(-s1[2], s1[1], z1), Vector3(-s0[2], s0[1], z0),
+			Vector3(-s0[4], s0[3], z0), Vector3(-s1[4], s1[3], z1))
+		# Left side upper blister fender
+		_add_quad(st_paint,
+			Vector3(-s1[4], s1[3], z1), Vector3(-s0[4], s0[3], z0),
+			Vector3(-s0[6], s0[5], z0), Vector3(-s1[6], s1[5], z1))
+
+		# Top surfaces: Trunk deck (stations 9..12) and Roof skin (stations 6..8)
+		if i >= 9:
+			_add_quad(st_paint,
+				Vector3(-s0[6], s0[5], z0), Vector3(s0[6], s0[5], z0),
+				Vector3(s1[6], s1[5], z1), Vector3(-s1[6], s1[5], z1))
+		elif i >= 6 and i <= 7:
+			# Roof top panel
+			_add_quad(st_paint,
+				Vector3(-s0[8], s0[7], z0), Vector3(s0[8], s0[7], z0),
+				Vector3(s1[8], s1[7], z1), Vector3(-s1[8], s1[7], z1))
+
+	# Front & Rear Fascia Caps
+	var sf: Array = stations[0]
+	_add_quad(st_paint,
+		Vector3(-sf[2], sf[1], sf[0]), Vector3(sf[2], sf[1], sf[0]),
+		Vector3(sf[4], sf[3], sf[0]), Vector3(-sf[4], sf[3], sf[0]))
+
+	var sr: Array = stations[stations.size() - 1]
+	_add_quad(st_paint,
+		Vector3(sr[2], sr[1], sr[0]), Vector3(-sr[2], sr[1], sr[0]),
+		Vector3(-sr[4], sr[3], sr[0]), Vector3(sr[4], sr[3], sr[0]))
+	_add_quad(st_paint,
+		Vector3(sr[4], sr[3], sr[0]), Vector3(-sr[4], sr[3], sr[0]),
+		Vector3(-sr[6], sr[5], sr[0]), Vector3(sr[6], sr[5], sr[0]))
+
+	# A-Pillars & C-Pillars (Painted Structural Pillars)
+	var s5: Array = stations[5]
+	var s6: Array = stations[6]
+	var s8: Array = stations[8]
+	var s9: Array = stations[9]
+
+	# Right & Left A-Pillar
+	_add_quad(st_paint,
+		Vector3(s5[6] - 0.08, s5[5], s5[0]), Vector3(s5[6], s5[5], s5[0]),
+		Vector3(s6[8], s6[7], s6[0]), Vector3(s6[8] - 0.08, s6[7], s6[0]))
+	_add_quad(st_paint,
+		Vector3(-s5[6], s5[5], s5[0]), Vector3(-s5[6] + 0.08, s5[5], s5[0]),
+		Vector3(-s6[8] + 0.08, s6[7], s6[0]), Vector3(-s6[8], s6[7], s6[0]))
+
+	# Right & Left C-Pillar (Iconic R34 Hofmeister-style notch)
+	_add_quad(st_paint,
+		Vector3(s8[8], s8[7], s8[0]), Vector3(s8[6], s8[5], s8[0]),
+		Vector3(s9[6], s9[5], s9[0]), Vector3(s9[6] - 0.14, s9[5], s9[0]))
+	_add_quad(st_paint,
+		Vector3(-s8[6], s8[5], s8[0]), Vector3(-s8[8], s8[7], s8[0]),
+		Vector3(-s9[6] + 0.14, s9[5], s9[0]), Vector3(-s9[6], s9[5], s9[0]))
+
+	st_paint.generate_normals()
+	var body_mesh_inst := MeshInstance3D.new()
+	body_mesh_inst.name = "PaintedUnibody"
+	body_mesh_inst.mesh = st_paint.commit()
+	body_mesh_inst.material_override = _mat_car_paint
+	body_node.add_child(body_mesh_inst)
+
+	# --- Smoked Cabin Glass (Windshield, Side Windows, Rear Window) ---
 	var st_glass := SurfaceTool.new()
 	st_glass.begin(Mesh.PRIMITIVE_TRIANGLES)
 
-	var st_trim := SurfaceTool.new()
-	st_trim.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# Front Windshield (Station 5 to 6)
+	_add_quad(st_glass,
+		Vector3(-s5[6] + 0.06, s5[5], s5[0]), Vector3(s5[6] - 0.06, s5[5], s5[0]),
+		Vector3(s6[8] - 0.06, s6[7], s6[0]), Vector3(-s6[8] + 0.06, s6[7], s6[0]))
 
-	# Generate perimeter ring points for each station
-	# Profile points per station (8 points from bottom-center out to roof-center):
-	# 0: Bottom Center (x=0)
-	# 1: Rocker Bottom Edge
-	# 2: Widebody Fender Bulge / Mid-Waist
-	# 3: Shoulder / Beltline Deck Edge
-	# 4: Hood/Trunk Inner Step or Glass Base
-	# 5: Cabin Roof Rail / Hood Power Bulge
-	# 6: Top Center (x=0)
-	var rings_right: Array = []
-	var rings_left: Array = []
+	# Rear Backlight Window (Station 8 to 9)
+	_add_quad(st_glass,
+		Vector3(s8[8] - 0.05, s8[7], s8[0]), Vector3(-s8[8] + 0.05, s8[7], s8[0]),
+		Vector3(-s9[6] + 0.12, s9[5], s9[0]), Vector3(s9[6] - 0.12, s9[5], s9[0]))
 
-	for i in range(stations.size()):
-		var s: Array = stations[i]
-		var z: float = s[0]
-		var bot_y: float = s[1]
-		var belt_y: float = s[2]
-		var deck_y: float = s[3]
-		var top_y: float = s[4]
-		var hw_bot: float = s[5]
-		var hw_fend: float = s[6]
-		var hw_deck: float = s[7]
-		var hw_cab: float = s[8]
+	# Side Windows (Stations 5 to 9)
+	for i in range(5, 8):
+		var sa: Array = stations[i]
+		var sb: Array = stations[i + 1]
+		var ya_top: float = sa[7] if i >= 6 else sa[5]
+		var xa_top: float = sa[8] if i >= 6 else sa[6]
+		var yb_top: float = sb[7]
+		var xb_top: float = sb[8]
 
-		# Add subtle NACA/Hood line contour on front hood
-		var center_top_y: float = top_y
-		if z < -0.75 and z > -2.15:
-			center_top_y += 0.018 # Subtle RB26 hood bulge
-		elif z >= -0.22 and z <= 0.82:
-			center_top_y += 0.015 # Roof crown
+		# Right side glass
+		_add_quad(st_glass,
+			Vector3(sa[6], sa[5], sa[0]), Vector3(sb[6], sb[5], sb[0]),
+			Vector3(xb_top, yb_top, sb[0]), Vector3(xa_top, ya_top, sa[0]))
+		# Left side glass
+		_add_quad(st_glass,
+			Vector3(-sb[6], sb[5], sb[0]), Vector3(-sa[6], sa[5], sa[0]),
+			Vector3(-xa_top, ya_top, sa[0]), Vector3(-xb_top, yb_top, sb[0]))
 
-		var pts_r: Array[Vector3] = [
-			Vector3(0.0, bot_y, z),
-			Vector3(hw_bot, bot_y, z),
-			Vector3(hw_fend, belt_y, z),
-			Vector3(hw_deck, deck_y, z),
-			Vector3(hw_cab, top_y, z),
-			Vector3(0.0, center_top_y, z)
-		]
-		var pts_l: Array[Vector3] = [
-			Vector3(0.0, bot_y, z),
-			Vector3(-hw_bot, bot_y, z),
-			Vector3(-hw_fend, belt_y, z),
-			Vector3(-hw_deck, deck_y, z),
-			Vector3(-hw_cab, top_y, z),
-			Vector3(0.0, center_top_y, z)
-		]
-		rings_right.append(pts_r)
-		rings_left.append(pts_l)
+	st_glass.generate_normals()
+	var glass_mesh_inst := MeshInstance3D.new()
+	glass_mesh_inst.name = "SmokedCabinGlass"
+	glass_mesh_inst.mesh = st_glass.commit()
+	glass_mesh_inst.material_override = _mat_glass_smoked
+	body_node.add_child(glass_mesh_inst)
 
-	# Loft adjacent stations
-	for i in range(stations.size() - 1):
-		var r0: Array[Vector3] = rings_right[i]
-		var r1: Array[Vector3] = rings_right[i + 1]
-		var l0: Array[Vector3] = rings_left[i]
-		var l1: Array[Vector3] = rings_left[i + 1]
-
-		var seg_is_glass: bool = stations[i][9] and stations[i + 1][9]
-		# Windshield is between station 5 (-0.78) and 6 (-0.22)
-		var is_windshield: bool = (i == 5)
-		# Rear window is between station 8 (0.82) and 10 (1.33)
-		var is_rear_glass: bool = (i == 8 or i == 9)
-
-		for j in range(5):
-			# Determine which SurfaceTool receives this quad strip
-			var target_st: SurfaceTool = st_paint
-			if j == 3: # Greenhouse / Window slope segment (between deck_y and top_y)
-				if seg_is_glass or is_windshield or is_rear_glass:
-					target_st = st_glass
-			elif j == 0: # Underbody floor pan
-				target_st = st_trim
-
-			# Right side quad (r0[j], r1[j], r1[j+1], r0[j+1])
-			_add_quad(target_st, r0[j], r0[j + 1], r1[j + 1], r1[j])
-			# Left side quad (mirrored winding)
-			_add_quad(target_st, l0[j + 1], l0[j], l1[j], l1[j + 1])
-
-	# Close Front Fascia Nose Cap (Station 0)
-	var f_r: Array[Vector3] = rings_right[0]
-	var f_l: Array[Vector3] = rings_left[0]
-	for j in range(5):
-		var st_target: SurfaceTool = st_trim if j <= 1 else st_paint
-		_add_quad(st_target, f_l[j], f_r[j], f_r[j + 1], f_l[j + 1])
-
-	# Close Rear Tailgate Fascia Cap (Last Station)
-	var b_idx: int = stations.size() - 1
-	var b_r: Array[Vector3] = rings_right[b_idx]
-	var b_l: Array[Vector3] = rings_left[b_idx]
-	for j in range(5):
-		var st_target: SurfaceTool = st_trim if j == 0 else st_paint
-		_add_quad(st_target, b_r[j], b_l[j], b_l[j + 1], b_r[j + 1])
-
-	# Add Sculpted A, B, and C Roof Pillars in Matte/Body Paint over Glass Edges
-	_build_pillars_and_frames(st_paint, st_trim, rings_right, rings_left)
-
-	# Commit Meshes
-	_commit_surface_to_node(st_paint, "BodyShell_BaysideBlue", _mat_body, parent)
-	_commit_surface_to_node(st_glass, "CabinGlasshouse", _mat_glass, parent)
-	_commit_surface_to_node(st_trim, "UnderbodyAndPillars", _mat_carbon_matte, parent)
-
-	# Add Wheel Arch Blackout Cavities so gaps behind wheels look deep and realistic
-	_build_wheel_wells(parent)
-
-func _build_pillars_and_frames(st_paint: SurfaceTool, st_trim: SurfaceTool, rings_r: Array, rings_l: Array) -> void:
-	# A-Pillars (Station 5 to 6)
-	_add_pillar_beam(st_paint, rings_r[5][3], rings_r[6][4], 0.045, 0.025)
-	_add_pillar_beam(st_paint, rings_l[5][3], rings_l[6][4], 0.045, 0.025)
-
-	# B-Pillars (Station 7 vertical door post in matte black)
-	_add_pillar_beam(st_trim, rings_r[7][3], rings_r[7][4], 0.055, 0.015)
-	_add_pillar_beam(st_trim, rings_l[7][3], rings_l[7][4], 0.055, 0.015)
-
-	# C-Pillars (Thick iconic R34 Hofmeister-style rear quarter pillar: Station 8 to 10)
-	_add_pillar_beam(st_paint, rings_r[8][4], rings_r[10][3], 0.095, 0.030)
-	_add_pillar_beam(st_paint, rings_l[8][4], rings_l[10][3], 0.095, 0.030)
-
-	# Wiper Cowl Panel at base of windshield
-	_add_box_to_st(st_trim, Vector3(0.0, 0.835, -0.78), Vector3(1.42, 0.03, 0.14))
-
-func _build_wheel_wells(parent: Node3D) -> void:
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var positions: Array[Vector3] = [
-		Vector3(-0.70, WHEEL_RADIUS, FRONT_AXLE_Z),
-		Vector3( 0.70, WHEEL_RADIUS, FRONT_AXLE_Z),
-		Vector3(-0.70, WHEEL_RADIUS, REAR_AXLE_Z),
-		Vector3( 0.70, WHEEL_RADIUS, REAR_AXLE_Z)
-	]
-	for pos in positions:
-		_add_cylinder_to_st(st, pos, 0.37, 0.34, 16, Vector3.RIGHT)
-	_commit_surface_to_node(st, "WheelWells", _mat_underglow_well, parent)
+	# Dark Wheelhouse Liners & Chassis Undertray
+	_spawn_box(body_node, "ChassisUndertray", Vector3(1.66, 0.06, 4.42), Vector3(0.0, 0.16, 0.0), Vector3.ZERO, _mat_black_trim)
 
 # ==============================================================================
-# 2. FRONT SPLITTER, INTERCOOLER MOUTH, SIDE SKIRTS & REAR DIFFUSER
+# 2. NISMO Z-TUNE CARBON AERO, VENTED HOOD, FMIC, DIFFUSER & GT WING
 # ==============================================================================
-func _build_aero_and_trim(parent: Node3D) -> void:
-	var st_trim := SurfaceTool.new()
-	st_trim.begin(Mesh.PRIMITIVE_TRIANGLES)
+func _build_aero_and_details(parent: Node3D) -> void:
+	var aero_root := Node3D.new()
+	aero_root.name = "NismoZTuneAero"
+	parent.add_child(aero_root)
 
-	var st_ic := SurfaceTool.new()
-	st_ic.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# --- A. Carbon Fiber Vented Z-Tune Hood (Station 1 to 5) ---
+	var st_hood := SurfaceTool.new()
+	st_hood.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_add_quad(st_hood,
+		Vector3(-0.76, 0.735, -2.12), Vector3(0.76, 0.735, -2.12),
+		Vector3(0.81, 0.852, -0.78), Vector3(-0.81, 0.852, -0.78))
+	st_hood.generate_normals()
+	var hood_inst := MeshInstance3D.new()
+	hood_inst.name = "ZTuneCarbonHood"
+	hood_inst.mesh = st_hood.commit()
+	hood_inst.material_override = _mat_carbon_fiber
+	aero_root.add_child(hood_inst)
 
-	var st_paint := SurfaceTool.new()
-	st_paint.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# Dual Z-Tune Hood Heat Extractor Louvers
+	for side in [-1.0, 1.0]:
+		for l in range(4):
+			var z_louver: float = -1.72 + float(l) * 0.14
+			var y_louver: float = lerpf(0.75, 0.82, (z_louver + 2.12) / 1.34)
+			_spawn_box(aero_root, "HoodLouver", Vector3(0.24, 0.018, 0.06),
+				Vector3(side * 0.34, y_louver, z_louver), Vector3(deg_to_rad(-14.0), 0.0, 0.0), _mat_black_trim)
 
-	# Aggressive Lower Front Splitter Lip (protruding forward at -2.35m)
-	_add_box_to_st(st_trim, Vector3(0.0, 0.115, -2.26), Vector3(1.74, 0.040, 0.26))
-	# Splitter Side Canards / End Fences
-	_add_box_to_st(st_trim, Vector3(-0.87, 0.16, -2.24), Vector3(0.025, 0.11, 0.22))
-	_add_box_to_st(st_trim, Vector3( 0.87, 0.16, -2.24), Vector3(0.025, 0.11, 0.22))
+	# --- B. Massive Front-Mount Intercooler (FMIC) & Bumper Cavity ---
+	_spawn_box(aero_root, "BumperIntakeCavity", Vector3(1.06, 0.30, 0.12), Vector3(0.0, 0.30, -2.25), Vector3.ZERO, _mat_black_trim)
+	_spawn_box(aero_root, "FMICCore", Vector3(0.92, 0.25, 0.08), Vector3(0.0, 0.30, -2.265), Vector3.ZERO, _mat_fmic_core)
 
-	# Iconic R34 Lower Intercooler Intake Mouth Housing (Recessed Black Surround)
-	_add_box_to_st(st_trim, Vector3(0.0, 0.28, -2.285), Vector3(0.96, 0.25, 0.08))
+	# Horizontal Fin Detail Bars & "NISMO" Stencil Accent on FMIC
+	for f in range(5):
+		_spawn_box(aero_root, "FMICFin", Vector3(0.90, 0.008, 0.09),
+			Vector3(0.0, 0.21 + float(f) * 0.045, -2.27), Vector3.ZERO, _mat_black_trim)
 
-	# Front-Mount Aluminum Intercooler Core + Horizontal Cooling Fin Louvers
-	_add_box_to_st(st_ic, Vector3(0.0, 0.28, -2.295), Vector3(0.86, 0.21, 0.07))
-	for fin in range(6):
-		var fin_y: float = 0.20 + float(fin) * 0.032
-		_add_box_to_st(st_trim, Vector3(0.0, fin_y, -2.332), Vector3(0.86, 0.006, 0.01))
+	# Polished Aluminum Intercooler End-Tanks & Piping
+	for side in [-1.0, 1.0]:
+		_spawn_cylinder(aero_root, "FMICPipe", 0.042, 0.24,
+			Vector3(side * 0.50, 0.28, -2.25), Vector3(0.0, 0.0, deg_to_rad(90.0)), _mat_chrome)
 
-	# Flanking Brake Duct Intakes on Front Bumper
-	_add_box_to_st(st_trim, Vector3(-0.66, 0.27, -2.27), Vector3(0.26, 0.16, 0.08))
-	_add_box_to_st(st_trim, Vector3( 0.66, 0.27, -2.27), Vector3(0.26, 0.16, 0.08))
+	# --- C. Front Carbon Chin Spoiler & Twin Corner Dive Planes (Canards) ---
+	_spawn_box(aero_root, "FrontCarbonSplitter", Vector3(1.78, 0.032, 0.34), Vector3(0.0, 0.135, -2.20), Vector3.ZERO, _mat_carbon_fiber)
+	for side in [-1.0, 1.0]:
+		# Splitter vertical end-fences
+		_spawn_box(aero_root, "SplitterEndFence", Vector3(0.02, 0.11, 0.26),
+			Vector3(side * 0.88, 0.18, -2.21), Vector3.ZERO, _mat_carbon_fiber)
+		# Upper & Lower Bumper Corner Canards
+		_spawn_box(aero_root, "UpperCanard", Vector3(0.14, 0.015, 0.22),
+			Vector3(side * 0.87, 0.36, -2.16), Vector3(deg_to_rad(14.0), side * deg_to_rad(-18.0), side * deg_to_rad(12.0)), _mat_carbon_fiber)
+		_spawn_box(aero_root, "LowerCanard", Vector3(0.12, 0.015, 0.18),
+			Vector3(side * 0.87, 0.26, -2.18), Vector3(deg_to_rad(12.0), side * deg_to_rad(-18.0), side * deg_to_rad(10.0)), _mat_carbon_fiber)
 
-	# Upper Grille Mesh Slot & GT-R Badge Plinth between Headlights
-	_add_box_to_st(st_trim, Vector3(0.0, 0.55, -2.28), Vector3(0.74, 0.085, 0.08))
-	_add_box_to_st(st_ic, Vector3(0.0, 0.55, -2.325), Vector3(0.07, 0.045, 0.02)) # GT-R Emblem
+		# Z-Tune Front Fender Air Extractor Vent Fin
+		_spawn_box(aero_root, "ZTuneFenderVent", Vector3(0.03, 0.32, 0.10),
+			Vector3(side * 0.915, 0.56, -0.96), Vector3(0.0, side * deg_to_rad(8.0), 0.0), _mat_black_trim)
 
-	# Muscular Nismo-Style Sculpted Side Skirts (between Front & Rear arches)
-	_add_box_to_st(st_paint, Vector3(-0.875, 0.165, 0.0), Vector3(0.07, 0.09, 1.88))
-	_add_box_to_st(st_paint, Vector3( 0.875, 0.165, 0.0), Vector3(0.07, 0.09, 1.88))
-	# Side Skirt Lower Matte Carbon Blades
-	_add_box_to_st(st_trim, Vector3(-0.895, 0.115, 0.0), Vector3(0.06, 0.025, 1.92))
-	_add_box_to_st(st_trim, Vector3( 0.895, 0.115, 0.0), Vector3(0.06, 0.025, 1.92))
+		# Nismo Side Skirts with Carbon Under-Board
+		_spawn_box(aero_root, "SideSkirtCarbon", Vector3(0.10, 0.035, 1.92),
+			Vector3(side * 0.89, 0.14, 0.0), Vector3.ZERO, _mat_carbon_fiber)
 
-	# V-Spec Carbon Rear Underbody Diffuser & Vertical Vortex Strakes
-	_add_box_to_st(st_trim, Vector3(0.0, 0.20, 2.24), Vector3(1.46, 0.11, 0.22))
-	for strake_x in [-0.52, -0.18, 0.18, 0.52]:
-		_add_box_to_st(st_trim, Vector3(strake_x, 0.16, 2.25), Vector3(0.02, 0.13, 0.26))
+		# Aero Side Mirrors
+		var mirror_pos := Vector3(side * 0.91, 0.89, -0.58)
+		_spawn_box(aero_root, "AeroMirrorPod", Vector3(0.16, 0.09, 0.12),
+			mirror_pos, Vector3(0.0, side * deg_to_rad(-12.0), 0.0), _mat_car_paint)
 
-	# Recessed Rear License Plate Pocket
-	_add_box_to_st(st_trim, Vector3(0.0, 0.42, 2.29), Vector3(0.42, 0.18, 0.04))
+	# --- D. Front Grille Mesh & Red GT-R Emblem ---
+	_spawn_box(aero_root, "UpperGrilleMesh", Vector3(0.76, 0.11, 0.06), Vector3(0.0, 0.61, -2.23), Vector3.ZERO, _mat_black_trim)
+	_spawn_box(aero_root, "GTRBadgeBacking", Vector3(0.08, 0.055, 0.02), Vector3(0.0, 0.61, -2.265), Vector3.ZERO, _mat_chrome)
+	_spawn_box(aero_root, "GTRBadgeRed", Vector3(0.07, 0.03, 0.025), Vector3(0.0, 0.595, -2.268), Vector3.ZERO, _mat_taillight_ring_outer)
 
-	_commit_surface_to_node(st_trim, "AeroTrimAndDiffuser", _mat_carbon_matte, parent)
-	_commit_surface_to_node(st_ic, "FrontMountIntercooler", _mat_intercooler, parent)
-	_commit_surface_to_node(st_paint, "SideSkirts", _mat_body, parent)
-
-# ==============================================================================
-# 3. TRUNK DOUBLE-BLADE GT RACING SPOILER & DUAL AERO MIRRORS
-# ==============================================================================
-func _build_gt_wing(parent: Node3D) -> void:
-	var st_paint := SurfaceTool.new()
-	st_paint.begin(Mesh.PRIMITIVE_TRIANGLES)
-
-	var st_carbon := SurfaceTool.new()
-	st_carbon.begin(Mesh.PRIMITIVE_TRIANGLES)
-
+	# --- E. High-Mount Carbon Fiber GT Wing with Aluminum Stanchions & Endplates ---
+	var wing_y: float = 1.19
 	var wing_z: float = 2.14
-	var base_y: float = 0.89
-	var top_y: float = 1.15
-	var span: float = 1.44
-
-	# Left & Right Sculpted Uprights / Stanchions
-	for side in [-1.0, 1.0]:
-		var ux: float = side * 0.52
-		_add_box_to_st(st_paint, Vector3(ux, (base_y + top_y) * 0.5, wing_z), Vector3(0.035, top_y - base_y, 0.20))
-
-		# Vertical Aerodynamic End-Plates (Body Color outer face, sharp GT silhouette)
-		var ep_x: float = side * (span * 0.5)
-		_add_box_to_st(st_paint, Vector3(ep_x, top_y - 0.02, wing_z + 0.01), Vector3(0.018, 0.19, 0.30))
-
-	# Primary Lower Airfoil Blade (Bayside Blue)
-	_add_box_to_st(st_paint, Vector3(0.0, top_y - 0.04, wing_z), Vector3(span, 0.024, 0.23))
-
-	# Secondary Upper Adjustable Gurney Carbon Blade (Double-Blade Spec)
-	_add_box_to_st(st_carbon, Vector3(0.0, top_y + 0.035, wing_z + 0.03), Vector3(span - 0.02, 0.020, 0.16))
-
-	# Center Blade Support Turnbuckles
-	_add_box_to_st(st_carbon, Vector3(-0.22, top_y, wing_z + 0.02), Vector3(0.012, 0.075, 0.04))
-	_add_box_to_st(st_carbon, Vector3( 0.22, top_y, wing_z + 0.02), Vector3(0.012, 0.075, 0.04))
-
-	_commit_surface_to_node(st_paint, "GTWing_Structure", _mat_body, parent)
-	_commit_surface_to_node(st_carbon, "GTWing_CarbonElement", _mat_carbon_matte, parent)
-
-func _build_side_mirrors(parent: Node3D) -> void:
-	var st_paint := SurfaceTool.new()
-	st_paint.begin(Mesh.PRIMITIVE_TRIANGLES)
-
-	var st_trim := SurfaceTool.new()
-	st_trim.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_spawn_box(aero_root, "GTWingMainBlade", Vector3(1.66, 0.026, 0.27),
+		Vector3(0.0, wing_y, wing_z), Vector3(deg_to_rad(9.5), 0.0, 0.0), _mat_carbon_fiber)
+	_spawn_box(aero_root, "GTWingGurneyFlap", Vector3(1.64, 0.024, 0.04),
+		Vector3(0.0, wing_y + 0.025, wing_z + 0.12), Vector3(deg_to_rad(28.0), 0.0, 0.0), _mat_carbon_fiber)
 
 	for side in [-1.0, 1.0]:
-		# Mirror Base Gusset on Door Corner
-		var base_pos := Vector3(side * 0.78, 0.87, -0.52)
-		_add_box_to_st(st_trim, base_pos, Vector3(0.08, 0.05, 0.12))
+		# Dual CNC Aluminum Stanchions
+		_spawn_box(aero_root, "GTWingStanchion", Vector3(0.022, 0.30, 0.18),
+			Vector3(side * 0.46, 1.03, 2.10), Vector3(deg_to_rad(-12.0), 0.0, 0.0), _mat_black_trim)
+		# Carbon Endplates
+		_spawn_box(aero_root, "GTWingEndplate", Vector3(0.018, 0.19, 0.36),
+			Vector3(side * 0.835, wing_y - 0.01, wing_z + 0.01), Vector3(deg_to_rad(6.0), 0.0, 0.0), _mat_carbon_fiber)
 
-		# Dual-Strut Aero Stalk
-		var stalk_pos := Vector3(side * 0.84, 0.89, -0.50)
-		_add_box_to_st(st_paint, stalk_pos, Vector3(0.10, 0.03, 0.06))
-
-		# Sculpted Aerodynamic Mirror Housing
-		var housing_pos := Vector3(side * 0.91, 0.91, -0.49)
-		_add_box_to_st(st_paint, housing_pos, Vector3(0.13, 0.085, 0.10))
-
-		# Reflective Mirror Glass Insert (Rear-facing)
-		var glass_pos := Vector3(side * 0.91, 0.91, -0.438)
-		_add_box_to_st(st_trim, glass_pos, Vector3(0.11, 0.065, 0.01))
-
-	_commit_surface_to_node(st_paint, "AeroSideMirrors", _mat_body, parent)
-	_commit_surface_to_node(st_trim, "MirrorBases", _mat_carbon_matte, parent)
+	# --- F. Rear Carbon Fiber Under-Bumper Diffuser with 4 Aero Strakes ---
+	_spawn_box(aero_root, "RearCarbonDiffuser", Vector3(1.52, 0.12, 0.38),
+		Vector3(0.0, 0.21, 2.16), Vector3(deg_to_rad(-11.0), 0.0, 0.0), _mat_carbon_fiber)
+	for strake_x in [-0.52, -0.18, 0.18, 0.52]:
+		_spawn_box(aero_root, "DiffuserStrake", Vector3(0.018, 0.14, 0.36),
+			Vector3(strake_x, 0.19, 2.18), Vector3(deg_to_rad(-8.0), 0.0, 0.0), _mat_carbon_fiber)
 
 # ==============================================================================
-# 4. CHROME EXHAUST CANNON (SINGLE 4-INCH JDM BARREL)
+# 3. CYBER NEON "GODZILLA EYES" HEADLIGHTS & ANGEL EYE HALOS
 # ==============================================================================
-func _build_exhaust_system(parent: Node3D) -> void:
-	var st_chrome := SurfaceTool.new()
-	st_chrome.begin(Mesh.PRIMITIVE_TRIANGLES)
+func _build_headlights(parent: Node3D) -> void:
+	var hl_root := Node3D.new()
+	hl_root.name = "GodzillaHeadlights"
+	parent.add_child(hl_root)
 
-	var st_inner := SurfaceTool.new()
-	st_inner.begin(Mesh.PRIMITIVE_TRIANGLES)
-
-	# Left-side exited Nismo / HKS Hi-Power 4-inch (0.105m diameter) angled cannon
-	var muffler_pos := Vector3(-0.46, 0.20, 2.15)
-	_add_cylinder_to_st(st_chrome, muffler_pos, 0.085, 0.32, 20, Vector3.BACK)
-
-	# Polished Rolled Lip Tip protruding past rear diffuser
-	var tip_pos := Vector3(-0.46, 0.195, 2.33)
-	_add_ring_extrusion_to_st(st_chrome, tip_pos, 0.046, 0.056, 0.14, 24, Vector3.BACK)
-
-	# Dark Soot Core inside Exhaust Barrel
-	_add_cylinder_to_st(st_inner, Vector3(-0.46, 0.195, 2.31), 0.045, 0.12, 16, Vector3.BACK)
-
-	_commit_surface_to_node(st_chrome, "JDM_ExhaustCannon", _mat_chrome, parent)
-	_commit_surface_to_node(st_inner, "ExhaustCore", _mat_underglow_well, parent)
-
-# ==============================================================================
-# 2. SIGNATURE LIGHTING & EMISSIVE SHADERS (QUAD HALOS & XENON PROJECTORS)
-# ==============================================================================
-func _build_lighting_assemblies(parent: Node3D) -> void:
-	var st_halo := SurfaceTool.new()
-	st_halo.begin(Mesh.PRIMITIVE_TRIANGLES)
-
-	var st_xenon := SurfaceTool.new()
-	st_xenon.begin(Mesh.PRIMITIVE_TRIANGLES)
-
-	var st_reverse := SurfaceTool.new()
-	st_reverse.begin(Mesh.PRIMITIVE_TRIANGLES)
-
-	var st_indicator := SurfaceTool.new()
-	st_indicator.begin(Mesh.PRIMITIVE_TRIANGLES)
-
-	var st_chrome := SurfaceTool.new()
-	st_chrome.begin(Mesh.PRIMITIVE_TRIANGLES)
-
-	var st_lens := SurfaceTool.new()
-	st_lens.begin(Mesh.PRIMITIVE_TRIANGLES)
-
-	var st_housing := SurfaceTool.new()
-	st_housing.begin(Mesh.PRIMITIVE_TRIANGLES)
-
-	# --------------------------------------------------------------------------
-	# A. REAR QUAD CIRCULAR LED HALO TAILLIGHTS (Iconic Outer Large + Inner Small)
-	# --------------------------------------------------------------------------
-	var tail_z: float = 2.302
 	for side in [-1.0, 1.0]:
-		# Dark recessed bezel housing
-		_add_box_to_st(st_housing, Vector3(side * 0.53, 0.72, tail_z - 0.015), Vector3(0.38, 0.17, 0.03))
+		var side_name := "L" if side < 0.0 else "R"
+		var housing_pos := Vector3(side * 0.61, 0.62, -2.18)
 
-		# Outer Large Halo Ring (Radius: 0.068m outer, 0.042m inner)
-		var outer_halo_pos := Vector3(side * 0.61, 0.725, tail_z)
-		_add_ring_extrusion_to_st(st_halo, outer_halo_pos, 0.040, 0.068, 0.022, 28, Vector3.BACK)
-		# Dark center core of outer ring + Amber turn signal dot inside
-		_add_cylinder_to_st(st_housing, outer_halo_pos, 0.039, 0.018, 20, Vector3.BACK)
-		_add_cylinder_to_st(st_indicator, outer_halo_pos + Vector3(0.0, 0.0, 0.004), 0.020, 0.020, 16, Vector3.BACK)
+		# Smoked Housing Bucket
+		_spawn_box(hl_root, "HeadlightBucket_" + side_name, Vector3(0.38, 0.13, 0.16),
+			housing_pos, Vector3(0.0, side * deg_to_rad(-14.0), side * deg_to_rad(-4.0)), _mat_black_trim)
 
-		# Inner Smaller Halo Ring (Radius: 0.052m outer, 0.032m inner)
-		var inner_halo_pos := Vector3(side * 0.44, 0.715, tail_z)
-		_add_ring_extrusion_to_st(st_halo, inner_halo_pos, 0.030, 0.052, 0.022, 28, Vector3.BACK)
-		_add_cylinder_to_st(st_housing, inner_halo_pos, 0.029, 0.018, 20, Vector3.BACK)
+		# Dual Projector Pods + Cyber Angel Eye Neon Halos (Outer & Inner)
+		for p in range(2):
+			var offset_x: float = side * (0.68 if p == 0 else 0.53)
+			var offset_z: float = -2.17 if p == 0 else -2.20
+			var pod_pos := Vector3(offset_x, 0.615, offset_z)
 
-		# Reverse Lights flanking the Rear License Plate
-		var rev_pos := Vector3(side * 0.28, 0.43, tail_z)
-		_add_box_to_st(st_reverse, rev_pos, Vector3(0.09, 0.055, 0.02))
+			# Xenon Lens Core
+			var core_mesh := SphereMesh.new()
+			core_mesh.radius = 0.036 if p == 0 else 0.030
+			core_mesh.height = core_mesh.radius * 2.0
+			var core_inst := MeshInstance3D.new()
+			core_inst.name = "ProjectorCore_" + side_name + str(p)
+			core_inst.mesh = core_mesh
+			core_inst.position = pod_pos
+			core_inst.material_override = _mat_headlight_core
+			hl_root.add_child(core_inst)
 
-	# High-Mount Center LED Third Brake Strip on Trunk Lip
-	_add_box_to_st(st_halo, Vector3(0.0, 0.885, tail_z - 0.005), Vector3(0.28, 0.018, 0.02))
+			# Cyber Angel Eye Torus Halo Ring
+			var halo_torus := TorusMesh.new()
+			halo_torus.outer_radius = 0.052 if p == 0 else 0.044
+			halo_torus.inner_radius = 0.038 if p == 0 else 0.032
+			halo_torus.rings = 24
+			halo_torus.ring_segments = 16
+			var halo_inst := MeshInstance3D.new()
+			halo_inst.name = "AngelEyeHalo_" + side_name + str(p)
+			halo_inst.mesh = halo_torus
+			halo_inst.position = pod_pos + Vector3(0.0, 0.0, -0.015)
+			halo_inst.rotation = Vector3(deg_to_rad(90.0), side * deg_to_rad(-12.0), 0.0)
+			halo_inst.material_override = _mat_halo_cyan
+			hl_root.add_child(halo_inst)
 
-	# --------------------------------------------------------------------------
-	# B. FRONT SHARP MULTI-PROJECTOR XENONS + LED DRL STRIPS
-	# --------------------------------------------------------------------------
-	var head_z: float = -2.275
-	for side in [-1.0, 1.0]:
-		# Aggressive Angled Black Headlight Housing Bucket
-		var h_pos := Vector3(side * 0.56, 0.57, head_z + 0.02)
-		_add_box_to_st(st_housing, h_pos, Vector3(0.38, 0.13, 0.10))
+		# Slanted Cyber-Brow LED DRL Strip
+		_spawn_box(hl_root, "CyberBrowDRL_" + side_name, Vector3(0.36, 0.018, 0.04),
+			housing_pos + Vector3(0.0, 0.062, -0.05),
+			Vector3(0.0, side * deg_to_rad(-14.0), side * deg_to_rad(-7.0)), _mat_halo_cyan)
 
-		# Dual Chrome Projector Bowls (Outer Low-Beam Xenon + Inner High-Beam)
-		var p_outer := Vector3(side * 0.62, 0.575, head_z - 0.01)
-		var p_inner := Vector3(side * 0.48, 0.565, head_z - 0.015)
+		# Smoked Clear Polycarbonate Lens Cover
+		_spawn_box(hl_root, "HeadlightLens_" + side_name, Vector3(0.39, 0.135, 0.03),
+			housing_pos + Vector3(0.0, 0.0, -0.075),
+			Vector3(deg_to_rad(-12.0), side * deg_to_rad(-14.0), side * deg_to_rad(-4.0)), _mat_headlight_glass)
 
-		_add_ring_extrusion_to_st(st_chrome, p_outer, 0.036, 0.048, 0.03, 20, Vector3.BACK)
-		_add_cylinder_to_st(st_xenon, p_outer, 0.035, 0.025, 20, Vector3.BACK)
+		# Lower Bumper Turn Signals & Cibie Fog Lamps
+		_spawn_box(hl_root, "FrontTurnSignal_" + side_name, Vector3(0.14, 0.045, 0.05),
+			Vector3(side * 0.72, 0.42, -2.23), Vector3(0.0, side * deg_to_rad(-16.0), 0.0), _mat_turn_signal)
+		_spawn_cylinder(hl_root, "CibieFogLamp_" + side_name, 0.042, 0.05,
+			Vector3(side * 0.56, 0.30, -2.25), Vector3(deg_to_rad(90.0), 0.0, 0.0), _mat_headlight_core)
 
-		_add_ring_extrusion_to_st(st_chrome, p_inner, 0.030, 0.042, 0.03, 20, Vector3.BACK)
-		_add_cylinder_to_st(st_xenon, p_inner, 0.029, 0.025, 20, Vector3.BACK)
-
-		# Sharp Lower & Inner LED Daytime Running Light (DRL) Signature Blade
-		_add_box_to_st(st_xenon, Vector3(side * 0.55, 0.515, head_z - 0.02), Vector3(0.34, 0.016, 0.02))
-
-		# Outer Corner Amber Indicator Marker
-		_add_box_to_st(st_indicator, Vector3(side * 0.73, 0.575, head_z), Vector3(0.045, 0.09, 0.03))
-
-		# Clear Glass Polycarbonate Aero Cover Lens over the entire projector assembly
-		_add_box_to_st(st_lens, Vector3(side * 0.56, 0.57, head_z - 0.025), Vector3(0.39, 0.135, 0.018))
-
-		# Active Forward Projector SpotLight3D Beam (5500K Crisp Xenon)
-		var beam := SpotLight3D.new()
-		beam.name = "XenonBeam_" + ("L" if side < 0.0 else "R")
-		beam.position = Vector3(side * 0.58, 0.57, head_z - 0.06)
-		beam.rotation_degrees = Vector3(-4.0, -2.5 * side, 0.0)
-		beam.light_color = Color(0.86, 0.93, 1.0)
-		beam.light_energy = 6.0
-		beam.spot_range = 65.0
-		beam.spot_angle = 38.0
-		beam.spot_attenuation = 0.85
-		beam.shadow_enabled = true
-		parent.add_child(beam)
+		# Forward SpotLight3D Beams
+		var spot := SpotLight3D.new()
+		spot.name = "HeadlightSpot_" + side_name
+		spot.position = housing_pos + Vector3(0.0, 0.0, -0.10)
+		spot.light_color = Color(0.82, 0.96, 1.0)
+		spot.light_energy = 4.8
+		spot.spot_range = 38.0
+		spot.spot_angle = 32.0
+		hl_root.add_child(spot)
 		if side < 0.0:
-			_spot_l = beam
+			_spot_headlight_l = spot
 		else:
-			_spot_r = beam
-
-	_commit_surface_to_node(st_halo, "Taillights_QuadHalos", _mat_taillight_halo, parent)
-	_commit_surface_to_node(st_xenon, "Headlights_XenonProjectors", _mat_headlight_xenon, parent)
-	_commit_surface_to_node(st_reverse, "ReverseLights", _mat_reverse_light, parent)
-	_commit_surface_to_node(st_indicator, "IndicatorLights", _mat_indicator_light, parent)
-	_commit_surface_to_node(st_chrome, "ProjectorBezels", _mat_chrome, parent)
-	_commit_surface_to_node(st_lens, "HeadlightClearLens", _mat_headlight_glass, parent)
-	_commit_surface_to_node(st_housing, "LightHousings", _mat_carbon_matte, parent)
+			_spot_headlight_r = spot
 
 # ==============================================================================
-# 3. DETAILED WHEELS & RUNNING GEAR (6-SPOKE NISMO RIMS, TIRES, ROTORS, BREMBO)
+# 4. ICONIC "GODZILLA" QUAD ROUND TAILLIGHTS
 # ==============================================================================
-func _create_wheel_anchor(node_name: String, pos: Vector3, is_left: bool, is_front: bool) -> Node3D:
-	var wheel_anchor := Node3D.new()
-	wheel_anchor.name = node_name
-	wheel_anchor.position = pos
-	add_child(wheel_anchor)
-	_set_owner_safe(wheel_anchor)
+func _build_taillights(parent: Node3D) -> void:
+	var tl_root := Node3D.new()
+	tl_root.name = "GodzillaQuadTaillights"
+	parent.add_child(tl_root)
 
-	var out_sign: float = -1.0 if is_left else 1.0
+	# Smoked Dark Rear Backing Panel
+	_spawn_box(tl_root, "TaillightDarkPanel", Vector3(1.54, 0.24, 0.06),
+		Vector3(0.0, 0.68, 2.28), Vector3.ZERO, _mat_black_trim)
 
-	# 1. Build Tire with Curved Sidewall & Circumferential Tread Grooves
-	var st_tire := SurfaceTool.new()
-	st_tire.begin(Mesh.PRIMITIVE_TRIANGLES)
-	_build_tire_geometry(st_tire, WHEEL_RADIUS, RIM_RADIUS, TIRE_WIDTH, 36)
-	_commit_surface_to_node(st_tire, "Tire_Mesh", _mat_tire, wheel_anchor)
+	for side in [-1.0, 1.0]:
+		var side_name := "L" if side < 0.0 else "R"
 
-	# 2. Build Nismo 6-Spoke Deep-Dish Alloy Rim
-	var st_rim := SurfaceTool.new()
-	st_rim.begin(Mesh.PRIMITIVE_TRIANGLES)
-	_build_nismo_rim_geometry(st_rim, RIM_RADIUS, TIRE_WIDTH * 0.92, out_sign, 36)
-	_commit_surface_to_node(st_rim, "Nismo6Spoke_Rim", _mat_rim, wheel_anchor)
+		# 1. Outer Larger Crimson Halo Ring (Radius 0.095m)
+		var outer_torus := TorusMesh.new()
+		outer_torus.outer_radius = 0.095
+		outer_torus.inner_radius = 0.062
+		outer_torus.rings = 28
+		outer_torus.ring_segments = 18
+		var outer_inst := MeshInstance3D.new()
+		outer_inst.name = "OuterTailRing_" + side_name
+		outer_inst.mesh = outer_torus
+		outer_inst.position = Vector3(side * 0.62, 0.70, 2.305)
+		outer_inst.rotation = Vector3(deg_to_rad(90.0), 0.0, 0.0)
+		outer_inst.material_override = _mat_taillight_ring_outer
+		tl_root.add_child(outer_inst)
 
-	# 3. Build Drilled Steel Brake Rotor (Cross-drilled ventilated disc)
-	var st_rotor := SurfaceTool.new()
-	st_rotor.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var rotor_radius: float = 0.175 if is_front else 0.165
-	var rotor_x: float = -out_sign * 0.025 # Tucked behind deep-dish spokes
-	_add_ring_extrusion_to_st(st_rotor, Vector3(rotor_x, 0.0, 0.0), 0.065, rotor_radius, 0.026, 28, Vector3.RIGHT)
-	_commit_surface_to_node(st_rotor, "DrilledBrakeRotor", _mat_rotor, wheel_anchor)
+		# Amber Turn Signal Embedded inside Outer Ring Center
+		_spawn_cylinder(tl_root, "RearTurnSignal_" + side_name, 0.032, 0.03,
+			Vector3(side * 0.62, 0.70, 2.30), Vector3(deg_to_rad(90.0), 0.0, 0.0), _mat_turn_signal)
 
-	# Cross-drilled cooling slot accents on rotor face
-	var st_holes := SurfaceTool.new()
-	st_holes.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var num_drill_patterns: int = 12
-	for i in range(num_drill_patterns):
-		var ang: float = (TAU / float(num_drill_patterns)) * float(i)
-		var r_mid: float = (0.075 + rotor_radius) * 0.52
-		var hp := Vector3(rotor_x, cos(ang) * r_mid, sin(ang) * r_mid)
-		_add_cylinder_to_st(st_holes, hp, 0.007, 0.030, 8, Vector3.RIGHT)
-	_commit_surface_to_node(st_holes, "RotorDrillHoles", _mat_underglow_well, wheel_anchor)
+		# 2. Inner Smaller Crimson Halo Ring (Radius 0.076m)
+		var inner_torus := TorusMesh.new()
+		inner_torus.outer_radius = 0.076
+		inner_torus.inner_radius = 0.048
+		inner_torus.rings = 28
+		inner_torus.ring_segments = 18
+		var inner_inst := MeshInstance3D.new()
+		inner_inst.name = "InnerTailRing_" + side_name
+		inner_inst.mesh = inner_torus
+		inner_inst.position = Vector3(side * 0.41, 0.69, 2.305)
+		inner_inst.rotation = Vector3(deg_to_rad(90.0), 0.0, 0.0)
+		inner_inst.material_override = _mat_taillight_ring_inner
+		tl_root.add_child(inner_inst)
 
-	# 4. Build Golden Brembo 6-Pot / 4-Pot Brake Caliper
-	var st_caliper := SurfaceTool.new()
-	st_caliper.begin(Mesh.PRIMITIVE_TRIANGLES)
-	# Mount Front Calipers toward rear of axle (+Z), Rear Calipers toward front (-Z)
-	var cal_z_dir: float = 1.0 if is_front else -1.0
-	var cal_r: float = rotor_radius * 0.78
-	var cal_pos := Vector3(rotor_x + out_sign * 0.008, 0.03, cal_z_dir * cal_r)
-	var cal_size := Vector3(0.075, 0.135 if is_front else 0.105, 0.075)
-	_add_box_to_st(st_caliper, cal_pos, cal_size)
-	_commit_surface_to_node(st_caliper, "BremboGold_Caliper", _mat_caliper, wheel_anchor)
+		# Kouki Clear Reverse Light Embedded cleanly next to Inner Ring
+		_spawn_cylinder(tl_root, "ReverseLight_" + side_name, 0.030, 0.03,
+			Vector3(side * 0.41, 0.69, 2.30), Vector3(deg_to_rad(90.0), 0.0, 0.0), _mat_reverse_light)
 
-	return wheel_anchor
-
-func _build_tire_geometry(st: SurfaceTool, outer_r: float, inner_r: float, width: float, segments: int) -> void:
-	var hw: float = width * 0.5
-	var bulge_w: float = hw * 1.05
-	var mid_r: float = lerpf(inner_r, outer_r, 0.55)
-	var shoulder_r: float = outer_r * 0.985
-	var groove_r: float = outer_r * 0.972
-
-	# Symmetric 1D profile across tire width (X) and radius (R):
-	# Bead Left -> Sidewall Bulge Left -> Shoulder Left -> 3 Tread Ribs with 2 Grooves -> Shoulder Right -> Bulge Right -> Bead Right
-	var prof_x: Array[float] = [
-		-hw * 0.94, -bulge_w, -hw * 0.90, -hw * 0.35, -hw * 0.25, -hw * 0.18,
-		 hw * 0.18,  hw * 0.25,  hw * 0.35,  hw * 0.90,  bulge_w,  hw * 0.94
-	]
-	var prof_r: Array[float] = [
-		inner_r, mid_r, shoulder_r, outer_r, groove_r, outer_r,
-		outer_r, groove_r, outer_r, shoulder_r, mid_r, inner_r
-	]
-
-	for i in range(segments):
-		var a0: float = (TAU * float(i)) / float(segments)
-		var a1: float = (TAU * float(i + 1)) / float(segments)
-		var c0: float = cos(a0)
-		var s0: float = sin(a0)
-		var c1: float = cos(a1)
-		var s1: float = sin(a1)
-
-		for p in range(prof_x.size() - 1):
-			var p00 := Vector3(prof_x[p], c0 * prof_r[p], s0 * prof_r[p])
-			var p01 := Vector3(prof_x[p + 1], c0 * prof_r[p + 1], s0 * prof_r[p + 1])
-			var p11 := Vector3(prof_x[p + 1], c1 * prof_r[p + 1], s1 * prof_r[p + 1])
-			var p10 := Vector3(prof_x[p], c1 * prof_r[p], s1 * prof_r[p])
-			_add_quad(st, p00, p01, p11, p10)
-
-func _build_nismo_rim_geometry(st: SurfaceTool, rim_r: float, width: float, out_sign: float, segments: int) -> void:
-	var hw: float = width * 0.5
-	var outer_x: float = out_sign * hw
-	var dish_x: float = out_sign * (hw - 0.048) # Deep-dish stepped lip offset
-	var hub_x: float = out_sign * (hw - 0.072)  # Concave central hub bowl
-
-	# 1. Outer Rim Barrel & Stepped Deep-Dish Lip
-	_add_ring_extrusion_to_st(st, Vector3(0.0, 0.0, 0.0), rim_r - 0.016, rim_r, width, segments, Vector3.RIGHT)
-	_add_ring_extrusion_to_st(st, Vector3( outer_x - out_sign * 0.022, 0.0, 0.0), rim_r - 0.032, rim_r - 0.014, 0.044, segments, Vector3.RIGHT)
-
-	# 2. Central Hub Cylinder & Center Cap
-	var hub_r: float = 0.062
-	_add_cylinder_to_st(st, Vector3(hub_x, 0.0, 0.0), hub_r, 0.045, 18, Vector3.RIGHT)
-
-	# 3. 6 Iconic Nismo / Volk TE37 Concave Spokes (connecting Hub to Deep-Dish Lip)
-	var num_spokes: int = 6
-	var spoke_len: float = (rim_r - 0.022) - (hub_r * 0.75)
-	var spoke_mid_r: float = (hub_r * 0.75) + spoke_len * 0.5
-
-	for s in range(num_spokes):
-		var angle: float = (TAU / float(num_spokes)) * float(s)
-		var basis := Basis(Vector3.RIGHT, angle)
-
-		# Spoke pitches outward from concave hub_x to dish_x
-		var p_center := Vector3((hub_x + dish_x) * 0.5, 0.0, 0.0) + basis * Vector3(0.0, spoke_mid_r, 0.0)
-		var spoke_tilt_angle: float = atan2(dish_x - hub_x, spoke_len) * 0.55
-		var spoke_basis: Basis = basis * Basis(Vector3.BACK, spoke_tilt_angle)
-
-		_add_oriented_box_to_st(st, p_center, spoke_basis, Vector3(0.020, spoke_len, 0.048))
-
-# ==============================================================================
-# LOW-LEVEL GEOMETRY PRIMITIVES & SURFACETOOL HELPERS
-# ==============================================================================
-func _commit_surface_to_node(st: SurfaceTool, mesh_name: String, material: Material, parent: Node3D) -> MeshInstance3D:
-	st.generate_normals()
-	st.generate_tangents()
-	var mesh: ArrayMesh = st.commit()
-	mesh.resource_name = mesh_name
-
-	var mi := MeshInstance3D.new()
-	mi.name = mesh_name
-	mi.mesh = mesh
-	mi.material_override = material
-	parent.add_child(mi)
-	_set_owner_safe(mi)
-	return mi
-
-func _add_quad(st: SurfaceTool, p0: Vector3, p1: Vector3, p2: Vector3, p3: Vector3) -> void:
-	var n: Vector3 = (p1 - p0).cross(p3 - p0).normalized()
-	st.set_normal(n)
-	st.set_uv(Vector2(0.0, 0.0))
-	st.add_vertex(p0)
-	st.set_uv(Vector2(1.0, 0.0))
-	st.add_vertex(p1)
-	st.set_uv(Vector2(1.0, 1.0))
-	st.add_vertex(p2)
-
-	st.set_normal(n)
-	st.set_uv(Vector2(0.0, 0.0))
-	st.add_vertex(p0)
-	st.set_uv(Vector2(1.0, 1.0))
-	st.add_vertex(p2)
-	st.set_uv(Vector2(0.0, 1.0))
-	st.add_vertex(p3)
-
-func _add_box_to_st(st: SurfaceTool, center: Vector3, size: Vector3) -> void:
-	_add_oriented_box_to_st(st, center, Basis.IDENTITY, size)
-
-func _add_oriented_box_to_st(st: SurfaceTool, center: Vector3, b: Basis, size: Vector3) -> void:
-	var hs: Vector3 = size * 0.5
-	var v: Array[Vector3] = [
-		center + b * Vector3(-hs.x, -hs.y, -hs.z),
-		center + b * Vector3( hs.x, -hs.y, -hs.z),
-		center + b * Vector3( hs.x,  hs.y, -hs.z),
-		center + b * Vector3(-hs.x,  hs.y, -hs.z),
-		center + b * Vector3(-hs.x, -hs.y,  hs.z),
-		center + b * Vector3( hs.x, -hs.y,  hs.z),
-		center + b * Vector3( hs.x,  hs.y,  hs.z),
-		center + b * Vector3(-hs.x,  hs.y,  hs.z)
-	]
-	_add_quad(st, v[0], v[1], v[2], v[3]) # Front (-Z)
-	_add_quad(st, v[5], v[4], v[7], v[6]) # Back (+Z)
-	_add_quad(st, v[4], v[0], v[3], v[7]) # Left (-X)
-	_add_quad(st, v[1], v[5], v[6], v[2]) # Right (+X)
-	_add_quad(st, v[3], v[2], v[6], v[7]) # Top (+Y)
-	_add_quad(st, v[4], v[5], v[1], v[0]) # Bottom (-Y)
-
-func _add_pillar_beam(st: SurfaceTool, p_start: Vector3, p_end: Vector3, width: float, thickness: float) -> void:
-	var dir: Vector3 = p_end - p_start
-	var length: float = dir.length()
-	if length < 0.001:
-		return
-	var mid: Vector3 = (p_start + p_end) * 0.5
-	var up_dir: Vector3 = dir.normalized()
-	var right_dir: Vector3 = up_dir.cross(Vector3.BACK).normalized()
-	if right_dir.length_squared() < 0.01:
-		right_dir = Vector3.RIGHT
-	var fwd_dir: Vector3 = right_dir.cross(up_dir).normalized()
-	var b := Basis(right_dir, up_dir, fwd_dir)
-	_add_oriented_box_to_st(st, mid, b, Vector3(thickness, length, width))
-
-func _add_cylinder_to_st(st: SurfaceTool, center: Vector3, radius: float, depth: float, segments: int, axis: Vector3) -> void:
-	_add_ring_extrusion_to_st(st, center, 0.0, radius, depth, segments, axis)
-
-func _add_ring_extrusion_to_st(st: SurfaceTool, center: Vector3, inner_r: float, outer_r: float, depth: float, segments: int, axis: Vector3) -> void:
-	var n_axis: Vector3 = axis.normalized()
-	var tangent: Vector3 = Vector3.UP if absf(n_axis.dot(Vector3.UP)) < 0.9 else Vector3.RIGHT
-	var u_axis: Vector3 = n_axis.cross(tangent).normalized()
-	var v_axis: Vector3 = n_axis.cross(u_axis).normalized()
-	var half_d: float = depth * 0.5
-
-	for i in range(segments):
-		var a0: float = (TAU * float(i)) / float(segments)
-		var a1: float = (TAU * float(i + 1)) / float(segments)
-		var dir0: Vector3 = u_axis * cos(a0) + v_axis * sin(a0)
-		var dir1: Vector3 = u_axis * cos(a1) + v_axis * sin(a1)
-
-		var f_out0: Vector3 = center + n_axis * half_d + dir0 * outer_r
-		var f_out1: Vector3 = center + n_axis * half_d + dir1 * outer_r
-		var b_out0: Vector3 = center - n_axis * half_d + dir0 * outer_r
-		var b_out1: Vector3 = center - n_axis * half_d + dir1 * outer_r
-
-		# Outer Wall
-		_add_quad(st, f_out0, b_out0, b_out1, f_out1)
-
-		if inner_r > 0.0005:
-			var f_in0: Vector3 = center + n_axis * half_d + dir0 * inner_r
-			var f_in1: Vector3 = center + n_axis * half_d + dir1 * inner_r
-			var b_in0: Vector3 = center - n_axis * half_d + dir0 * inner_r
-			var b_in1: Vector3 = center - n_axis * half_d + dir1 * inner_r
-
-			# Inner Wall
-			_add_quad(st, b_in0, f_in0, f_in1, b_in1)
-			# Front Annulus Face (+axis)
-			_add_quad(st, f_in0, f_out0, f_out1, f_in1)
-			# Back Annulus Face (-axis)
-			_add_quad(st, b_out0, b_in0, b_in1, b_out1)
+		# Taillight Crimson Bloom OmniLight3D
+		var omni := OmniLight3D.new()
+		omni.name = "TaillightOmni_" + side_name
+		omni.position = Vector3(side * 0.52, 0.70, 2.38)
+		omni.light_color = Color(1.0, 0.05, 0.14)
+		omni.light_energy = 1.0
+		omni.omni_range = 3.5
+		tl_root.add_child(omni)
+		if side < 0.0:
+			_omni_taillight_l = omni
 		else:
-			# Solid Cylinder Caps
-			var f_c: Vector3 = center + n_axis * half_d
-			var b_c: Vector3 = center - n_axis * half_d
-			_add_quad(st, f_c, f_out0, f_out1, f_c)
-			_add_quad(st, b_out0, b_c, b_c, b_out1)
+			_omni_taillight_r = omni
+
+# ==============================================================================
+# 5. VISIBLE COCKPIT INTERIOR (RHD JAPANESE SPEC, MFD, & CUSCO ROLL CAGE)
+# ==============================================================================
+func _build_rhd_interior(parent: Node3D) -> void:
+	var int_root := Node3D.new()
+	int_root.name = "RHDInterior"
+	parent.add_child(int_root)
+
+	# Cabin Floorpan, Center Tunnel, & Dashboard Bulkhead
+	_spawn_box(int_root, "CabinFloor", Vector3(1.48, 0.05, 1.85), Vector3(0.0, 0.26, 0.05), Vector3.ZERO, _mat_interior_dark)
+	_spawn_box(int_root, "TransmissionTunnel", Vector3(0.24, 0.18, 1.75), Vector3(0.0, 0.36, 0.05), Vector3.ZERO, _mat_interior_dark)
+	_spawn_box(int_root, "DashboardMain", Vector3(1.46, 0.28, 0.42), Vector3(0.0, 0.72, -0.58), Vector3.ZERO, _mat_interior_dark)
+
+	# --- A. Center Dash R34 MFD Telemetry Screen Pod ---
+	_spawn_box(int_root, "MFDPodHood", Vector3(0.24, 0.14, 0.22), Vector3(0.0, 0.88, -0.56), Vector3.ZERO, _mat_interior_dark)
+	_spawn_box(int_root, "MFDScreenDisplay", Vector3(0.20, 0.11, 0.02),
+		Vector3(0.0, 0.88, -0.45), Vector3(deg_to_rad(-8.0), deg_to_rad(-10.0), 0.0), _mat_mfd_screen)
+
+	# --- B. Right-Hand Drive (RHD, X = +0.36m) Nismo Gauge Cluster & Steering Wheel ---
+	var rhd_x: float = 0.36
+	_spawn_box(int_root, "NismoGaugeBinnacle", Vector3(0.32, 0.16, 0.20), Vector3(rhd_x, 0.87, -0.54), Vector3.ZERO, _mat_interior_dark)
+	_spawn_box(int_root, "NismoGaugeClusterFace", Vector3(0.28, 0.13, 0.02),
+		Vector3(rhd_x, 0.87, -0.44), Vector3(deg_to_rad(-12.0), 0.0, 0.0), _mat_gauge_cluster)
+
+	# Steering Column & 3-Spoke Momo/Nismo Sports Wheel
+	var wheel_center := Vector3(rhd_x, 0.81, -0.28)
+	_spawn_cylinder(int_root, "SteeringColumn", 0.035, 0.28,
+		Vector3(rhd_x, 0.80, -0.41), Vector3(deg_to_rad(72.0), 0.0, 0.0), _mat_interior_dark)
+
+	var sw_torus := TorusMesh.new()
+	sw_torus.outer_radius = 0.165
+	sw_torus.inner_radius = 0.135
+	sw_torus.rings = 24
+	sw_torus.ring_segments = 12
+	var sw_inst := MeshInstance3D.new()
+	sw_inst.name = "NismoSteeringWheelRim"
+	sw_inst.mesh = sw_torus
+	sw_inst.position = wheel_center
+	sw_inst.rotation = Vector3(deg_to_rad(72.0), 0.0, 0.0)
+	sw_inst.material_override = _mat_interior_dark
+	int_root.add_child(sw_inst)
+
+	# Red Top-Center Marker & 3 Spokes
+	_spawn_box(int_root, "SteeringCenterMarker", Vector3(0.025, 0.032, 0.032),
+		wheel_center + Vector3(0.0, 0.145, -0.045), Vector3(deg_to_rad(-18.0), 0.0, 0.0), _mat_recaro_red)
+	for sp_ang in [-90.0, 0.0, 90.0]:
+		_spawn_box(int_root, "SteeringSpoke", Vector3(0.028, 0.14, 0.015),
+			wheel_center, Vector3(deg_to_rad(-18.0), 0.0, deg_to_rad(sp_ang)), _mat_chrome)
+
+	# Getrag 6-Speed Shifter & Handbrake on Center Tunnel
+	_spawn_cylinder(int_root, "ShifterStalk", 0.012, 0.16, Vector3(0.06, 0.52, -0.22), Vector3(deg_to_rad(-10.0), 0.0, 0.0), _mat_chrome)
+	var knob_sphere := SphereMesh.new()
+	knob_sphere.radius = 0.026
+	knob_sphere.height = 0.052
+	var knob_inst := MeshInstance3D.new()
+	knob_inst.mesh = knob_sphere
+	knob_inst.position = Vector3(0.06, 0.60, -0.21)
+	knob_inst.material_override = _mat_titanium_burnt
+	int_root.add_child(knob_inst)
+
+	# --- C. Dual Recaro / Bride Bucket Seats (Charcoal with Red Bolster Accents) ---
+	for side in [-1.0, 1.0]:
+		var seat_x: float = side * 0.36
+		var seat_z: float = 0.08
+		_spawn_box(int_root, "RecaroSeatBase", Vector3(0.46, 0.09, 0.48), Vector3(seat_x, 0.36, seat_z - 0.06), Vector3.ZERO, _mat_interior_dark)
+		_spawn_box(int_root, "RecaroSeatBack", Vector3(0.44, 0.62, 0.09),
+			Vector3(seat_x, 0.68, seat_z + 0.16), Vector3(deg_to_rad(-14.0), 0.0, 0.0), _mat_interior_dark)
+		# Red Contrast Shoulder Bolsters & Cushion Insert
+		_spawn_box(int_root, "RecaroRedShoulders", Vector3(0.50, 0.18, 0.10),
+			Vector3(seat_x, 0.86, seat_z + 0.20), Vector3(deg_to_rad(-14.0), 0.0, 0.0), _mat_recaro_red)
+		_spawn_box(int_root, "RecaroRedCushion", Vector3(0.30, 0.48, 0.10),
+			Vector3(seat_x, 0.66, seat_z + 0.155), Vector3(deg_to_rad(-14.0), 0.0, 0.0), _mat_recaro_red)
+		_spawn_box(int_root, "RecaroHeadrest", Vector3(0.24, 0.18, 0.08),
+			Vector3(seat_x, 1.02, seat_z + 0.24), Vector3(deg_to_rad(-8.0), 0.0, 0.0), _mat_recaro_red)
+
+	# --- D. Cusco Metallic Cyan Bolt-In Roll Cage with X-Brace ---
+	var cage_r: float = 0.022
+	# Main B-Pillar Hoop
+	_spawn_cylinder(int_root, "RollCageTopBar", cage_r, 1.18, Vector3(0.0, 1.24, 0.36), Vector3(0.0, 0.0, deg_to_rad(90.0)), _mat_roll_cage)
+	for side in [-1.0, 1.0]:
+		_spawn_cylinder(int_root, "RollCageBPillar", cage_r, 0.88, Vector3(side * 0.58, 0.80, 0.36), Vector3.ZERO, _mat_roll_cage)
+		_spawn_cylinder(int_root, "RollCageRearStrut", cage_r, 0.92,
+			Vector3(side * 0.52, 0.98, 0.72), Vector3(deg_to_rad(48.0), 0.0, 0.0), _mat_roll_cage)
+	# X-Brace Diagonal Bars visible through rear window
+	_spawn_cylinder(int_root, "RollCageXBrace1", cage_r, 1.32,
+		Vector3(0.0, 0.96, 0.68), Vector3(deg_to_rad(36.0), 0.0, deg_to_rad(52.0)), _mat_roll_cage)
+	_spawn_cylinder(int_root, "RollCageXBrace2", cage_r, 1.32,
+		Vector3(0.0, 0.96, 0.68), Vector3(deg_to_rad(36.0), 0.0, deg_to_rad(-52.0)), _mat_roll_cage)
+
+# ==============================================================================
+# 6. NISMO LMGT4 5-SPOKE FORGED WHEELS & BREMBO BRAKE ASSEMBLIES
+# ==============================================================================
+func _build_wheel_assembly(wheel_name: String, pos: Vector3, is_left: bool, is_front: bool) -> Node3D:
+	var wheel_root := Node3D.new()
+	wheel_root.name = wheel_name
+	wheel_root.position = pos
+
+	var side_sign: float = -1.0 if is_left else 1.0
+
+	# 1. Tire Tread & Sidewall Stencil
+	var tire_cyl := CylinderMesh.new()
+	tire_cyl.top_radius = WHEEL_RADIUS
+	tire_cyl.bottom_radius = WHEEL_RADIUS
+	tire_cyl.height = WHEEL_WIDTH
+	tire_cyl.radial_segments = 32
+	var tire_inst := MeshInstance3D.new()
+	tire_inst.name = "PotenzaTire"
+	tire_inst.mesh = tire_cyl
+	tire_inst.rotation = Vector3(0.0, 0.0, deg_to_rad(90.0))
+	tire_inst.material_override = _mat_tire_rubber
+	wheel_root.add_child(tire_inst)
+
+	# Sidewall Stencil Quad (Outer face)
+	var stencil_quad := QuadMesh.new()
+	stencil_quad.size = Vector2(WHEEL_RADIUS * 1.96, WHEEL_RADIUS * 1.96)
+	var stencil_inst := MeshInstance3D.new()
+	stencil_inst.name = "TireSidewallStencil"
+	stencil_inst.mesh = stencil_quad
+	stencil_inst.position = Vector3(side_sign * (WHEEL_WIDTH * 0.5 + 0.003), 0.0, 0.0)
+	stencil_inst.rotation = Vector3(0.0, deg_to_rad(-90.0 if is_left else 90.0), 0.0)
+	stencil_inst.material_override = _mat_tire_sidewall
+	wheel_root.add_child(stencil_inst)
+
+	# 2. Polished Stepped Chrome Outer Barrel Lip
+	var lip_torus := TorusMesh.new()
+	lip_torus.outer_radius = 0.245
+	lip_torus.inner_radius = 0.212
+	lip_torus.rings = 28
+	lip_torus.ring_segments = 14
+	var lip_inst := MeshInstance3D.new()
+	lip_inst.name = "LMGT4SteppedLip"
+	lip_inst.mesh = lip_torus
+	lip_inst.position = Vector3(side_sign * (WHEEL_WIDTH * 0.42), 0.0, 0.0)
+	lip_inst.rotation = Vector3(0.0, 0.0, deg_to_rad(90.0))
+	lip_inst.material_override = _mat_wheel_lip
+	wheel_root.add_child(lip_inst)
+
+	# 3. Deep Concave Nismo LMGT4 5-Spoke Center & Hub
+	var hub_x: float = side_sign * (WHEEL_WIDTH * 0.24)
+	_spawn_cylinder(wheel_root, "CenterHub", 0.068, 0.08,
+		Vector3(hub_x, 0.0, 0.0), Vector3(0.0, 0.0, deg_to_rad(90.0)), _mat_wheel_spoke)
+
+	for s in range(5):
+		var angle_rad: float = float(s) * TAU / 5.0
+		var spoke_pivot := Node3D.new()
+		spoke_pivot.name = "LMGT4Spoke_" + str(s)
+		spoke_pivot.rotation = Vector3(angle_rad, 0.0, 0.0)
+		wheel_root.add_child(spoke_pivot)
+
+		# Concave angled spoke from recessed center hub out to stepped rim barrel
+		_spawn_box(spoke_pivot, "SpokeArm", Vector3(0.026, 0.165, 0.052),
+			Vector3(side_sign * (WHEEL_WIDTH * 0.31), 0.125, 0.0),
+			Vector3(0.0, 0.0, side_sign * deg_to_rad(-14.0)), _mat_wheel_spoke)
+
+		# Lug Nut
+		_spawn_cylinder(spoke_pivot, "LugNut", 0.009, 0.03,
+			Vector3(hub_x + side_sign * 0.03, 0.042, 0.0),
+			Vector3(0.0, 0.0, deg_to_rad(90.0)), _mat_chrome)
+
+	# 4. Ventilated Brake Rotor & Multi-Pot Brembo Caliper
+	var rotor_radius: float = 0.185 if is_front else 0.172
+	var rotor_x: float = side_sign * (WHEEL_WIDTH * 0.08)
+	_spawn_cylinder(wheel_root, "VentilatedBrakeDisc", rotor_radius, 0.028,
+		Vector3(rotor_x, 0.0, 0.0), Vector3(0.0, 0.0, deg_to_rad(90.0)), _mat_brake_rotor)
+
+	var caliper_z: float = 0.115 if is_front else -0.105
+	_spawn_box(wheel_root, "BremboCaliper", Vector3(0.068, 0.135, 0.082),
+		Vector3(rotor_x + side_sign * 0.015, 0.04, caliper_z),
+		Vector3(deg_to_rad(-18.0 if is_front else 18.0), 0.0, 0.0), _mat_brembo_caliper)
+
+	return wheel_root
+
+# ==============================================================================
+# 7. TITANIUM EXHAUST & AUTHENTIC ANIME VFX (BACKFIRE, MANGA SMOKE, STREAMERS)
+# ==============================================================================
+func _build_exhaust_and_vfx(parent: Node3D) -> void:
+	var vfx_root := Node3D.new()
+	vfx_root.name = "ExhaustAndAnimeVFX"
+	parent.add_child(vfx_root)
+
+	# --- A. Large-Bore Nismo Weldina / Titanium Exhaust Canister (Left Side Exit) ---
+	var exhaust_pos := Vector3(-0.48, 0.21, 2.26)
+	_spawn_cylinder(vfx_root, "TitaniumMufflerCanister", 0.095, 0.38,
+		exhaust_pos + Vector3(0.04, 0.02, -0.18),
+		Vector3(deg_to_rad(86.0), deg_to_rad(-10.0), 0.0), _mat_chrome)
+
+	var tip_cyl := CylinderMesh.new()
+	tip_cyl.top_radius = 0.068
+	tip_cyl.bottom_radius = 0.068
+	tip_cyl.height = 0.22
+	tip_cyl.radial_segments = 24
+	var tip_inst := MeshInstance3D.new()
+	tip_inst.name = "BurntTitaniumTip"
+	tip_inst.mesh = tip_cyl
+	tip_inst.position = exhaust_pos
+	tip_inst.rotation = Vector3(deg_to_rad(86.0), deg_to_rad(-10.0), 0.0)
+	tip_inst.material_override = _mat_titanium_burnt
+	vfx_root.add_child(tip_inst)
+
+	# --- B. Dual-Cone Anime Backfire Particles (Cyan Core #00F8FF + Magenta Fringe #FF1493) ---
+	var flame_origin := exhaust_pos + Vector3(-0.02, 0.0, 0.14)
+
+	_particles_backfire_cyan = _create_backfire_particles("BackfireCyanCore", flame_origin, Color("#00F8FF"), 0.055, 0.32, 9.5)
+	_particles_backfire_magenta = _create_backfire_particles("BackfireMagentaFringe", flame_origin, Color("#FF1493"), 0.095, 0.44, 6.5)
+	vfx_root.add_child(_particles_backfire_cyan)
+	vfx_root.add_child(_particles_backfire_magenta)
+
+	_omni_backfire = OmniLight3D.new()
+	_omni_backfire.name = "BackfireFlashLight"
+	_omni_backfire.position = flame_origin + Vector3(0.0, 0.0, 0.22)
+	_omni_backfire.light_color = Color(0.25, 0.85, 1.0)
+	_omni_backfire.light_energy = 0.0
+	_omni_backfire.omni_range = 4.5
+	_omni_backfire.visible = false
+	vfx_root.add_child(_omni_backfire)
+
+	# --- C. Cel-Shaded Manga Tire Smoke (7 Radial Segments Low-Poly Toon Spheres) ---
+	_particles_smoke_rl = _create_manga_smoke_particles("MangaSmokeRL", Vector3(-HALF_TRACK, 0.12, REAR_AXLE_Z + 0.18))
+	_particles_smoke_rr = _create_manga_smoke_particles("MangaSmokeRR", Vector3(HALF_TRACK, 0.12, REAR_AXLE_Z + 0.18))
+	vfx_root.add_child(_particles_smoke_rl)
+	vfx_root.add_child(_particles_smoke_rr)
+
+	# --- D. Manga Speed Streamers (GT Wing Endplates & Side Mirrors) ---
+	_particles_streamer_wing_l = _create_wind_streamer_particles("WingStreamerL", Vector3(-0.835, 1.20, 2.28))
+	_particles_streamer_wing_r = _create_wind_streamer_particles("WingStreamerR", Vector3(0.835, 1.20, 2.28))
+	_particles_streamer_mirror_l = _create_wind_streamer_particles("MirrorStreamerL", Vector3(-0.95, 0.89, -0.52))
+	_particles_streamer_mirror_r = _create_wind_streamer_particles("MirrorStreamerR", Vector3(0.95, 0.89, -0.52))
+	vfx_root.add_child(_particles_streamer_wing_l)
+	vfx_root.add_child(_particles_streamer_wing_r)
+	vfx_root.add_child(_particles_streamer_mirror_l)
+	vfx_root.add_child(_particles_streamer_mirror_r)
+
+func _create_backfire_particles(p_name: String, pos: Vector3, col: Color, radius: float, length: float, speed: float) -> GPUParticles3D:
+	var p := GPUParticles3D.new()
+	p.name = p_name
+	p.position = pos
+	p.emitting = false
+	p.one_shot = true
+	p.explosiveness = 0.92
+	p.amount = 14
+	p.lifetime = 0.14
+
+	var p_mat := ParticleProcessMaterial.new()
+	p_mat.direction = Vector3(-0.12, 0.05, 1.0)
+	p_mat.spread = 8.5
+	p_mat.initial_velocity_min = speed * 0.8
+	p_mat.initial_velocity_max = speed * 1.2
+	p_mat.gravity = Vector3.ZERO
+	p_mat.scale_min = 0.7
+	p_mat.scale_max = 1.35
+	p.process_material = p_mat
+
+	var cone := CylinderMesh.new()
+	cone.top_radius = 0.005
+	cone.bottom_radius = radius
+	cone.height = length
+	cone.radial_segments = 8
+
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.albedo_color = col
+	cone.material = mat
+
+	p.draw_pass_1 = cone
+	return p
+
+func _create_manga_smoke_particles(p_name: String, pos: Vector3) -> GPUParticles3D:
+	var p := GPUParticles3D.new()
+	p.name = p_name
+	p.position = pos
+	p.emitting = false
+	p.amount = 28
+	p.lifetime = 0.85
+
+	var p_mat := ParticleProcessMaterial.new()
+	p_mat.direction = Vector3(0.0, 0.35, 1.0)
+	p_mat.spread = 28.0
+	p_mat.initial_velocity_min = 2.4
+	p_mat.initial_velocity_max = 5.2
+	p_mat.gravity = Vector3(0.0, 1.4, 0.0)
+	p_mat.damping_min = 2.0
+	p_mat.damping_max = 4.0
+	p_mat.scale_min = 0.65
+	p_mat.scale_max = 1.65
+	p.process_material = p_mat
+
+	var puff := SphereMesh.new()
+	puff.radius = 0.24
+	puff.height = 0.44
+	puff.radial_segments = 7
+	puff.rings = 5
+	puff.material = _mat_manga_smoke
+
+	p.draw_pass_1 = puff
+	return p
+
+func _create_wind_streamer_particles(p_name: String, pos: Vector3) -> GPUParticles3D:
+	var p := GPUParticles3D.new()
+	p.name = p_name
+	p.position = pos
+	p.emitting = false
+	p.amount = 16
+	p.lifetime = 0.35
+
+	var p_mat := ParticleProcessMaterial.new()
+	p_mat.direction = Vector3(0.0, 0.0, 1.0)
+	p_mat.spread = 1.8
+	p_mat.initial_velocity_min = 12.0
+	p_mat.initial_velocity_max = 18.0
+	p_mat.gravity = Vector3.ZERO
+	p.process_material = p_mat
+
+	var ribbon := BoxMesh.new()
+	ribbon.size = Vector3(0.015, 0.015, 0.85)
+	ribbon.material = _mat_wind_streamer
+
+	p.draw_pass_1 = ribbon
+	return p
+
+# ==============================================================================
+# GEOMETRY HELPER UTILITIES
+# ==============================================================================
+func _add_quad(st: SurfaceTool, v0: Vector3, v1: Vector3, v2: Vector3, v3: Vector3) -> void:
+	st.add_vertex(v0)
+	st.add_vertex(v1)
+	st.add_vertex(v2)
+	st.add_vertex(v0)
+	st.add_vertex(v2)
+	st.add_vertex(v3)
+
+func _spawn_box(parent: Node3D, node_name: String, size: Vector3, pos: Vector3, rot: Vector3, mat: Material) -> MeshInstance3D:
+	var bm := BoxMesh.new()
+	bm.size = size
+	var inst := MeshInstance3D.new()
+	inst.name = node_name
+	inst.mesh = bm
+	inst.position = pos
+	inst.rotation = rot
+	inst.material_override = mat
+	parent.add_child(inst)
+	return inst
+
+func _spawn_cylinder(parent: Node3D, node_name: String, radius: float, height: float, pos: Vector3, rot: Vector3, mat: Material) -> MeshInstance3D:
+	var cm := CylinderMesh.new()
+	cm.top_radius = radius
+	cm.bottom_radius = radius
+	cm.height = height
+	cm.radial_segments = 20
+	var inst := MeshInstance3D.new()
+	inst.name = node_name
+	inst.mesh = cm
+	inst.position = pos
+	inst.rotation = rot
+	inst.material_override = mat
+	parent.add_child(inst)
+	return inst

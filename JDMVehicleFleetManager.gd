@@ -311,6 +311,8 @@ func _rebind_vehicle_wheels(target_car: Node3D, model_root: Node3D) -> void:
 			target_car.set(prop_name, prop_map[prop_name])
 	
 	# Cache rest/base positions if controller uses rest offset arrays for suspension travel
+	if "r34_model" in target_car:
+		target_car.set("r34_model", model_root)
 	if "wheel_base_positions" in target_car or "wheel_rest_positions" in target_car:
 		var base_positions: Array[Vector3] = []
 		for w in found_wheels:
