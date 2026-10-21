@@ -1338,6 +1338,11 @@ func _spawn_player_vehicle() -> void:
 		_spawned_vehicle.add_child(vfx_inst)
 		if "target_vehicle" in vfx_inst:
 			vfx_inst.set("target_vehicle", _spawned_vehicle)
+
+	# Attach Itasha Anime Girl Livery (Hood & Side Door Decals)
+	var itasha_script := load("res://ItashaAnimeGirlLivery.gd")
+	if itasha_script != null and itasha_script.has_method("attach_to_car"):
+		itasha_script.call("attach_to_car", _spawned_vehicle)
 	_spawned_vehicle.global_transform = _spawn_transform
 	if _spawned_vehicle.has_method("set_spawn_transform"):
 		_spawned_vehicle.call("set_spawn_transform", _spawn_transform)

@@ -225,7 +225,12 @@ func apply_vehicle_to_player(car_id: CarID) -> void:
 	if car_id == CarID.AE86_TRUENO:
 		popups_open = true
 		_apply_popup_state_to_model(new_model, popups_open)
-	
+
+	# 6. Apply Itasha Anime Girl Livery
+	var itasha_script := load("res://ItashaAnimeGirlLivery.gd")
+	if itasha_script != null and itasha_script.has_method("attach_to_car"):
+		itasha_script.call("attach_to_car", target_car)
+
 	vehicle_swapped.emit(int(car_id), specs)
 
 
