@@ -66,7 +66,7 @@ var settings: Dictionary = {
 	"ssil_enabled": true,
 	"volumetric_fog_enabled": true,
 	"god_rays_temporal": true,
-	"volumetric_fog_density": 0.015,
+	"volumetric_fog_density": 0.0035,
 	"shadow_size": 2048,
 	"shadow_filter_quality": 3, # RenderingServer.ShadowQuality
 	"motion_blur_enabled": true,
@@ -195,8 +195,8 @@ func apply_preset(preset: QualityPreset, save_to_disk: bool = true) -> void:
 			settings["motion_blur_enabled"] = false
 
 		QualityPreset.HIGH:
-			settings["resolution_scale"] = 0.77
-			settings["upscaler_mode"] = UpscalerMode.FSR_2_2 # FSR 2.2 Quality (0.77x) + Temporal AA
+			settings["resolution_scale"] = 1.00
+			settings["upscaler_mode"] = UpscalerMode.BILINEAR
 			settings["taa_enabled"] = true
 			settings["fxaa_enabled"] = false
 			settings["msaa_3d"] = Viewport.MSAA_DISABLED
@@ -209,7 +209,7 @@ func apply_preset(preset: QualityPreset, save_to_disk: bool = true) -> void:
 			settings["ssil_enabled"] = true
 			settings["volumetric_fog_enabled"] = true
 			settings["god_rays_temporal"] = true
-			settings["volumetric_fog_density"] = 0.015
+			settings["volumetric_fog_density"] = 0.0032
 			settings["shadow_size"] = 2048
 			settings["shadow_filter_quality"] = RenderingServer.SHADOW_QUALITY_SOFT_MEDIUM
 			settings["motion_blur_enabled"] = true
@@ -223,15 +223,15 @@ func apply_preset(preset: QualityPreset, save_to_disk: bool = true) -> void:
 			settings["fxaa_enabled"] = false
 			settings["msaa_3d"] = Viewport.MSAA_DISABLED
 			settings["sdfgi_enabled"] = true
-			settings["sdfgi_quality"] = 2 # 4 Cascades, Bounce 0.5, Occlusion, Read Skylight
+			settings["sdfgi_quality"] = 2 # 4 Cascades, Bounce 0.65, Occlusion, Read Skylight
 			settings["ssr_enabled"] = true
 			settings["ssr_quality"] = 3 # Max 128 steps + Roughness
 			settings["ssao_enabled"] = true
-			settings["ssao_quality"] = 3 # Ultra + Horizon Angle 0.25
+			settings["ssao_quality"] = 3 # Ultra
 			settings["ssil_enabled"] = true
 			settings["volumetric_fog_enabled"] = true
 			settings["god_rays_temporal"] = true
-			settings["volumetric_fog_density"] = 0.018
+			settings["volumetric_fog_density"] = 0.0038
 			settings["shadow_size"] = 4096
 			settings["shadow_filter_quality"] = RenderingServer.SHADOW_QUALITY_SOFT_HIGH
 			settings["motion_blur_enabled"] = true
@@ -390,17 +390,18 @@ func _apply_environment_features() -> void:
 			# High Preset: 1 Cascade, 0.25 min cell size
 			env.sdfgi_cascades = 1
 			env.sdfgi_min_cell_size = 0.25
-			env.sdfgi_bounce_feedback = 0.35
+			env.sdfgi_bounce_feedback = 0.45
 			env.sdfgi_use_occlusion = true
 			env.sdfgi_read_sky_light = true
+			env.sdfgi_energy = 1.45
 		else:
 			# Ultra / Ray Tracing (Initial D Touge Sunset Glow): 4 Cascades
 			env.sdfgi_cascades = 4
 			env.sdfgi_min_cell_size = 0.20
-			env.sdfgi_bounce_feedback = 0.50
+			env.sdfgi_bounce_feedback = 0.65
 			env.sdfgi_use_occlusion = true
 			env.sdfgi_read_sky_light = true
-			env.sdfgi_energy = 1.15
+			env.sdfgi_energy = 1.75
 
 	# 2. Screen-Space Reflections (SSR)
 	var ssr_on: bool = bool(settings["ssr_enabled"]) and int(settings["ssr_quality"]) > 0
@@ -424,14 +425,9 @@ func _apply_environment_features() -> void:
 	# 3. Screen-Space Ambient Occlusion (SSAO) & Indirect Lighting (SSIL)
 	env.ssao_enabled = bool(settings["ssao_enabled"])
 	if env.ssao_enabled:
-		if int(settings["ssao_quality"]) >= 3:
-			env.ssao_horizon = 0.25
-			env.ssao_intensity = 2.15
-			env.ssao_radius = 1.15
-		else:
-			env.ssao_horizon = 0.06
-			env.ssao_intensity = 1.85
-			env.ssao_radius = 1.0
+		env.ssao_horizon = 0.06
+		env.ssao_intensity = 0.95
+		env.ssao_radius = 1.0
 
 	env.ssil_enabled = bool(settings["ssil_enabled"])
 	if env.ssil_enabled:
