@@ -79,6 +79,14 @@ func _ready() -> void:
 		call_deferred("_setup_vehicle_fleet_manager")
 		call_deferred("_setup_multiplayer_network_manager")
 		call_deferred("_setup_anime_post_process")
+		call_deferred("_setup_drift_referee_system")
+
+
+func _setup_drift_referee_system() -> void:
+	var referee_script := load("res://TougeDriftRefereeSystem.gd")
+	if referee_script != null:
+		var referee_mgr = referee_script.new()
+		add_child(referee_mgr)
 
 
 func _setup_anime_post_process() -> void:
@@ -1450,7 +1458,7 @@ func _setup_desktop_ui() -> void:
 	guide_vbox.add_child(guide_title)
 
 	var guide_text := Label.new()
-	guide_text.text = "[W / ↑] Accelerate      [S / ↓] Brake / Reverse\n[A D / ← →] Steer       [SPACE] Handbrake Drift\n[R] Respawn Car         [F1] Manual  [F2] Anime Style  [TAB] Netcode"
+	guide_text.text = "[W / ↑] Throttle  [S / ↓] Brake  [A D / ← →] Steer  [SPACE] Drift\n[H] Pop-Up Lights  [F2] Anime  [F3] Referee HUD  [F4] Fill Cup  [TAB] Net"
 	guide_text.add_theme_color_override("font_color", Color(0.85, 0.88, 0.94))
 	guide_text.add_theme_font_size_override("font_size", 12)
 	guide_vbox.add_child(guide_text)
