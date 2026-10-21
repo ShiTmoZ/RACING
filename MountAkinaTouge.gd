@@ -1321,7 +1321,7 @@ func _spawn_player_vehicle() -> void:
 	if _spawned_vehicle == null:
 		return
 	
-	_spawned_vehicle.name = "SkylineGTR_R34"
+	_spawned_vehicle.name = "AE86_PANDA_TRUENO"
 	_spawned_vehicle.add_to_group("player")
 	_spawned_vehicle.add_to_group("vehicle")
 	add_child(_spawned_vehicle)
@@ -1383,14 +1383,14 @@ func _spawn_player_vehicle() -> void:
 			vfx.set("vehicle", _spawned_vehicle)
 			_spawned_vehicle.add_child(vfx)
 
-	# Attach JDM Speedometer HUD (Defi / GReddy Digital HUD Cluster)
-	var hud_script: Script = load("res://JDMSpeedometerHUD.gd")
-	if hud_script != null:
-		var hud: CanvasLayer = hud_script.new() as CanvasLayer
-		if hud != null:
-			hud.name = "JDMSpeedometerHUD"
-			hud.set("target_vehicle", _spawned_vehicle)
-			add_child(hud)
+	# Legacy analog speedometer removed in favor of Initial D Digital Cluster HUD
+	# var hud_script: Script = load("res://JDMSpeedometerHUD.gd")
+	# if hud_script != null:
+	# 	var hud: CanvasLayer = hud_script.new() as CanvasLayer
+	# 	if hud != null:
+	# 		hud.name = "JDMSpeedometerHUD"
+	# 		hud.set("target_vehicle", _spawned_vehicle)
+	# 		add_child(hud)
 
 
 func _find_camera_recursive(node: Node) -> Camera3D:

@@ -1107,7 +1107,7 @@ void light() {
 	_toon_overlay_material.next_pass = _outline_pass_material
 
 func _apply_toon_shader_recursively(root: Node) -> void:
-	if root == self:
+	if _is_headless or root == self:
 		return
 
 	if root is MeshInstance3D:
