@@ -82,11 +82,15 @@ func _ready() -> void:
 		call_deferred("_setup_drift_referee_system")
 
 
+var _referee_mgr: Node = null
+
 func _setup_drift_referee_system() -> void:
 	var referee_script := load("res://TougeDriftRefereeSystem.gd")
 	if referee_script != null:
-		var referee_mgr = referee_script.new()
-		add_child(referee_mgr)
+		_referee_mgr = referee_script.new()
+		add_child(_referee_mgr)
+		if _spawned_vehicle != null and _referee_mgr.has_method("set_target_vehicle"):
+			_referee_mgr.call("set_target_vehicle", _spawned_vehicle)
 
 
 func _setup_anime_post_process() -> void:
@@ -1306,7 +1310,11 @@ func _spawn_player_vehicle() -> void:
 		return
 	
 	_spawned_vehicle.name = "SkylineGTR_R34"
+	_spawned_vehicle.add_to_group("player")
+	_spawned_vehicle.add_to_group("vehicle")
 	add_child(_spawned_vehicle)
+	if _referee_mgr != null and _referee_mgr.has_method("set_target_vehicle"):
+		_referee_mgr.call("set_target_vehicle", _spawned_vehicle)
 	_spawned_vehicle.global_transform = _spawn_transform
 	if _spawned_vehicle.has_method("set_spawn_transform"):
 		_spawned_vehicle.call("set_spawn_transform", _spawn_transform)

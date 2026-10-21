@@ -47,6 +47,7 @@ const COMBO_GRACE_TIME_SEC: float = 1.20     # 1.2s chain window between hairpin
 const MAX_COMBO_MULTIPLIER: float = 5.0      # Up to 5.0x combo
 
 ## 3. Manga Onomatopoeia Tuning
+@export var enable_manga_text_popups: bool = false
 const MANGA_POPUP_LIFETIME: float = 0.70     # 0.7s total popup duration
 const MANGA_POP_SCALE_START: float = 1.40    # Pops in at 1.4x scale
 const MANGA_POP_SCALE_SETTLE: float = 1.00   # Settles to 1.0x scale
@@ -300,6 +301,10 @@ func _physics_process(delta: float) -> void:
 # ==============================================================================
 # VEHICLE DISCOVERY & HEADLIGHT RIGGING
 # ==============================================================================
+func set_target_vehicle(target: Node3D) -> void:
+	if target != null:
+		_bind_vehicle(target)
+
 func _locate_player_vehicle() -> void:
 	if not is_inside_tree():
 		return
@@ -327,9 +332,9 @@ func _locate_player_vehicle() -> void:
 func _find_vehicle_recursive(root: Node) -> Node3D:
 	if root is VehicleBody3D:
 		return root as Node3D
-	if root is RigidBody3D or root is CharacterBody3D:
+	if root is Node3D:
 		var n_lower: String = root.name.to_lower()
-		if n_lower.contains("car") or n_lower.contains("ae86") or n_lower.contains("trueno") or n_lower.contains("vehicle") or n_lower.contains("player") or n_lower.contains("drift"):
+		if n_lower.contains("car") or n_lower.contains("ae86") or n_lower.contains("trueno") or n_lower.contains("vehicle") or n_lower.contains("player") or n_lower.contains("drift") or n_lower.contains("skyline") or n_lower.contains("gtr") or n_lower.contains("r34") or "speed_kmh" in root:
 			return root as Node3D
 	for child: Node in root.get_children():
 		if child.name == "TougeDriftPhysicsSolver" and root is Node3D:
@@ -905,6 +910,8 @@ func _check_clutch_kick_and_shift_triggers() -> void:
 		_spawn_manga_popup("カァッ", "KAAAH!", Color(0.35, 0.88, 1.0))
 
 func _spawn_manga_popup(katakana_text: String, romaji_text: String, accent: Color) -> void:
+	if not enable_manga_text_popups:
+		return
 	var item := MangaPopupItem.new()
 	item.katakana = katakana_text
 	item.romaji = romaji_text
