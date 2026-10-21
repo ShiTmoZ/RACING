@@ -31,19 +31,37 @@ signal gear_changed(new_gear: int)
 @export var suspension_max_force: float = 45000.0
 @export var anti_roll_stiffness: float = 11000.0
 
-@export_group("Drivetrain")
-@export var engine_peak_torque: float = 430.0
+@export_group("RB26DETT Engine & Turbo")
+@export var base_peak_torque_nm: float = 520.0
 @export var idle_rpm: float = 950.0
-@export var redline_rpm: float = 7400.0
-@export var gear_ratios: Array[float] = [3.55, 2.35, 1.72, 1.30, 1.04, 0.82]
-@export var final_drive: float = 3.42
-@export var reverse_ratio: float = 3.10
-@export var drivetrain_efficiency: float = 0.92
-@export var upshift_rpm: float = 6900.0
-@export var downshift_rpm: float = 2500.0
-@export var shift_duration: float = 0.20
-@export var reverse_torque_scale: float = 0.90
+@export var redline_rpm: float = 8200.0
+@export var rev_limiter_cutoff_rpm: float = 8350.0
+@export var engine_inertia: float = 0.22 ## Controls free-revving responsiveness
+@export var engine_braking_coeff: float = 45.0
+
+@export_subgroup("Twin-Turbocharger (Garrett T28 Spec)")
+@export var min_vacuum_bar: float = -0.65
+@export var max_boost_bar: float = 1.35
+@export var boost_threshold_rpm: float = 3200.0
+@export var full_spool_rpm: float = 4200.0
+@export var spool_up_rate: float = 4.2 ## Bar/sec under full exhaust load
+@export var bypass_vent_rate: float = 9.5 ## Blow-off valve decay rate (Bar/sec)
+@export var max_boost_torque_multiplier: float = 1.48 ## Peak multiplier at +1.35 bar
+
+@export_group("Close-Ratio 6-Speed Touge Gearbox")
+@export var gear_ratios: Array[float] = [3.827, 2.360, 1.685, 1.312, 1.000, 0.793]
+@export var reverse_ratio: float = 3.280
+@export var final_drive: float = 3.545
+@export var drivetrain_efficiency: float = 0.88
+@export var upshift_rpm: float = 7100.0
+@export var downshift_rpm: float = 3100.0
+@export var shift_duration_sec: float = 0.11
+@export var auto_transmission: bool = true
 @export var max_reverse_speed: float = 18.0
+
+@export_group("Braking & Wheel Specs")
+@export var max_brake_torque_nm: float = 3400.0
+@export var direction_switch_speed_threshold: float = 1.25 ## m/s (~4.5 km/h)
 
 @export_group("Tires")
 ## Peak friction coefficient of the tire model (1.0 = 1 g).
@@ -73,13 +91,48 @@ var handbrake_input: float = 0.0
 
 var speed_kmh: float = 0.0
 var forward_speed: float = 0.0
-var engine_rpm: float = 0.0
+var engine_rpm: float = 950.0
 var gear_number: int = 1
 var is_reversing: bool = false
 
-var _gear_index: int = 0
-var _shift_timer: float = 0.0
+# --- Runtime Telemetry (RB26DETT & Touge Transmission) ---
+var current_rpm: float = 950.0
+var current_boost_bar: float = -0.65
+var current_gear: int = 1
+var shift_timer: float = 0.0
+
+var active_engine_throttle: float = 0.0
+var net_drive_axle_torque_nm: float = 0.0
+var net_wheel_brake_torque_nm: float = 0.0
+
 var _engine_force: float = 0.0
+var _shift_timer: float:
+	get:
+		return shift_timer
+	set(val):
+		shift_timer = val
+
+var _gear_index: int:
+	get:
+		return maxi(0, current_gear - 1)
+	set(val):
+		current_gear = val + 1
+
+var turbo_boost_bar: float:
+	get:
+		return current_boost_bar
+
+var boost_bar: float:
+	get:
+		return current_boost_bar
+
+var turbo_boost: float:
+	get:
+		return current_boost_bar
+
+var gear_ratio: float:
+	get:
+		return absf(get_active_gear_ratio())
 var _spawn_transform: Transform3D = Transform3D.IDENTITY
 var _flip_timer: float = 0.0
 
@@ -101,13 +154,7 @@ var wheel_contact_points: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO, Vector3.
 var wheel_contact_normals: Array[Vector3] = [Vector3.UP, Vector3.UP, Vector3.UP, Vector3.UP]
 var wheel_is_grounded: Array[bool] = [false, false, false, false]
 
-var current_gear: int:
-	get:
-		return -1 if is_reversing else gear_number
 
-var gear_ratio: float:
-	get:
-		return reverse_ratio if is_reversing else (gear_ratios[mini(_gear_index, gear_ratios.size() - 1)] if not gear_ratios.is_empty() else 3.2)
 
 # ----------------------------------------------------------------------------- lifecycle
 func _ready() -> void:
@@ -239,50 +286,208 @@ func _update_steering(delta: float) -> void:
 		_wheel_steer[i] = steer_angle if _is_front[i] == 1 else 0.0
 
 # ----------------------------------------------------------------------------- drivetrain
-func _engine_torque(rpm: float) -> float:
-	# Broad, naturally aspirated style curve: strong from idle, peak around 70%
-	# of redline, gentle fall-off afterwards.
-	var x := clampf(rpm / redline_rpm, 0.0, 1.0)
-	var curve := 0.62 + 0.86 * x - 0.60 * x * x
-	return engine_peak_torque * curve
-
 func _update_drivetrain(delta: float) -> void:
-	var wheel_rpm := absf(forward_speed) / wheel_radius * (60.0 / TAU)
+	var avg_omega := forward_speed / maxf(wheel_radius, 0.05)
+	var prev_gear := current_gear
 
-	if forward_speed < 0.8 and brake_input > 0.2 and throttle_input < 0.1:
-		is_reversing = true
-	if throttle_input > 0.2 and forward_speed < 4.0:
-		is_reversing = false
+	update_drivetrain(delta, forward_speed, avg_omega)
 
-	var ratio := reverse_ratio if is_reversing else gear_ratios[_gear_index]
-	engine_rpm = clampf(wheel_rpm * ratio * final_drive, idle_rpm, redline_rpm)
+	# Convert net axle drive torque into linear tire propulsion force
+	var drive_force := net_drive_axle_torque_nm / maxf(wheel_radius, 0.05)
+	if is_reversing and forward_speed < -max_reverse_speed:
+		drive_force = 0.0
+	_engine_force = drive_force
 
-	if _shift_timer > 0.0:
-		_shift_timer = maxf(_shift_timer - delta, 0.0)
+	engine_rpm = current_rpm
+	gear_number = current_gear if current_gear > 0 else 1
+	if current_gear != prev_gear:
+		gear_changed.emit(current_gear)
 
-	if not is_reversing and _shift_timer <= 0.0 and absf(forward_speed) > 2.0:
-		if engine_rpm > upshift_rpm and _gear_index < gear_ratios.size() - 1:
-			_gear_index += 1
-			_shift_timer = shift_duration
-			gear_number = _gear_index + 1
-			gear_changed.emit(gear_number)
-		elif engine_rpm < downshift_rpm and _gear_index > 0:
-			_gear_index -= 1
-			_shift_timer = shift_duration * 0.7
-			gear_number = _gear_index + 1
-			gear_changed.emit(gear_number)
 
-	var drive_input := brake_input if is_reversing else throttle_input
-	var torque := _engine_torque(engine_rpm) * drive_input
-	var force := torque * ratio * final_drive * drivetrain_efficiency / wheel_radius
+## Call inside _physics_process(delta) before executing your Kamm's Circle / Raycast solver.
+## @param forward_speed_mps: Vehicle velocity projected onto -global_transform.basis.z
+## @param avg_drive_wheel_omega: Average angular velocity (rad/s) of driven wheels
+func update_drivetrain(delta: float, forward_speed_mps: float, avg_drive_wheel_omega: float) -> void:
+	_resolve_reverse_and_braking_separation(forward_speed_mps)
 
+	if auto_transmission:
+		_update_automatic_transmission(delta, forward_speed_mps)
+	elif shift_timer > 0.0:
+		shift_timer = maxf(0.0, shift_timer - delta)
+
+	_update_rpm_and_turbo_spool(delta, avg_drive_wheel_omega)
+	_compute_axle_drive_torque()
+
+
+# ------------------------------------------------------------------------------
+# 1. REVERSE GEAR & BRAKING STATE SEPARATION
+# ------------------------------------------------------------------------------
+func _resolve_reverse_and_braking_separation(forward_speed_mps: float) -> void:
+	# Transition between Forward and Reverse states near standstill
+	if not is_reversing:
+		if forward_speed_mps < direction_switch_speed_threshold and brake_input > 0.15 and throttle_input < 0.05:
+			is_reversing = true
+			current_gear = -1
+	else:
+		if forward_speed_mps > -direction_switch_speed_threshold and throttle_input > 0.15 and brake_input < 0.05:
+			is_reversing = false
+			current_gear = 1
+
+	# Strictly isolate throttle torque from brake pad clamping
 	if is_reversing:
-		force = -absf(force) * reverse_torque_scale
-		if forward_speed < -max_reverse_speed:
-			force = 0.0
-	if _shift_timer > 0.0:
-		force = 0.0
-	_engine_force = force
+		current_gear = -1
+		active_engine_throttle = brake_input
+		# Strictly apply brakes ONLY when throttle_input > 0.0 while moving backward
+		if throttle_input > 0.0 and forward_speed_mps < -0.05:
+			net_wheel_brake_torque_nm = throttle_input * max_brake_torque_nm
+		else:
+			net_wheel_brake_torque_nm = 0.0
+	else:
+		if current_gear < 1:
+			current_gear = 1
+		active_engine_throttle = throttle_input
+		net_wheel_brake_torque_nm = brake_input * max_brake_torque_nm
+
+
+# ------------------------------------------------------------------------------
+# 2. CLOSE-RATIO 6-SPEED TOUGE TRANSMISSION
+# ------------------------------------------------------------------------------
+func _update_automatic_transmission(delta: float, forward_speed_mps: float) -> void:
+	if shift_timer > 0.0:
+		shift_timer = maxf(0.0, shift_timer - delta)
+		return
+	if is_reversing:
+		return
+
+	# Detect steep Touge incline to hold lower gears under load
+	var forward_vec: Vector3 = -global_transform.basis.z
+	var incline_sin: float = clampf(forward_vec.y, -1.0, 1.0)
+	var uphill_rpm_hold_offset: float = clampf(incline_sin * 1600.0, 0.0, 600.0)
+
+	var effective_upshift_rpm: float = minf(upshift_rpm + uphill_rpm_hold_offset, redline_rpm - 250.0)
+	var effective_downshift_rpm: float = downshift_rpm + (uphill_rpm_hold_offset * 0.65)
+
+	if current_rpm >= effective_upshift_rpm and current_gear < gear_ratios.size():
+		# Verify wheel speed supports next gear without lugging below boost threshold
+		var next_ratio: float = gear_ratios[current_gear] * final_drive
+		var projected_rpm: float = (maxf(forward_speed_mps, 0.0) / maxf(wheel_radius, 0.1)) * next_ratio * 9.5492965855
+		if projected_rpm > downshift_rpm + 250.0:
+			current_gear += 1
+			shift_timer = shift_duration_sec
+	elif current_rpm <= effective_downshift_rpm and current_gear > 1:
+		current_gear -= 1
+		shift_timer = shift_duration_sec * 0.75
+
+
+# ------------------------------------------------------------------------------
+# 3. ENGINE RPM & RB26DETT TWIN-TURBO SPOOL MODEL
+# ------------------------------------------------------------------------------
+func _update_rpm_and_turbo_spool(delta: float, avg_drive_wheel_omega: float) -> void:
+	var active_ratio: float = get_active_gear_ratio() * final_drive
+	var wheel_coupled_rpm: float = absf(avg_drive_wheel_omega) * absf(active_ratio) * 9.5492965855
+
+	# Slip clutch below 2600 RPM under heavy load so 1st/2nd gear never bog on 15° inclines
+	var launch_assist_rpm: float = idle_rpm + (active_engine_throttle * 2650.0)
+	var target_rpm: float = maxf(wheel_coupled_rpm, launch_assist_rpm)
+
+	if shift_timer > 0.0:
+		# Slight RPM drop during gear engagement
+		target_rpm = lerpf(current_rpm, wheel_coupled_rpm, 0.5)
+
+	var rpm_response_rate: float = 20.0 / maxf(engine_inertia, 0.05)
+	current_rpm = lerpf(current_rpm, target_rpm, clampf(delta * rpm_response_rate, 0.0, 1.0))
+	current_rpm = clampf(current_rpm, idle_rpm, rev_limiter_cutoff_rpm)
+
+	# --- Twin-Turbo Boost Pressure Accumulation (-0.65 bar to +1.35 bar) ---
+	var effective_throttle: float = active_engine_throttle if shift_timer <= 0.0 else 0.15
+	var target_boost: float = min_vacuum_bar
+
+	if effective_throttle > 0.08:
+		# Bring pressure from vacuum to atmospheric (0.0 bar) with throttle opening
+		var atmo_transition: float = lerpf(min_vacuum_bar, 0.0, clampf(effective_throttle * 1.4, 0.0, 1.0))
+
+		if current_rpm >= 2600.0:
+			# Primary spool ramp above 3200 RPM, full positive pressure by 4200 RPM
+			var exhaust_enthalpy: float = clampf(
+				(current_rpm - boost_threshold_rpm) / maxf(full_spool_rpm - boost_threshold_rpm, 100.0),
+				-0.25,
+				1.0
+			)
+			var spool_curve: float = smoothstep(-0.25, 1.0, exhaust_enthalpy)
+			var positive_boost: float = max_boost_bar * spool_curve * pow(effective_throttle, 1.15)
+			target_boost = clampf(atmo_transition + positive_boost, min_vacuum_bar, max_boost_bar)
+		else:
+			target_boost = atmo_transition
+
+	# Asymmetric rate: exhaust builds turbine speed progressively; BOV vents rapidly on lift
+	if target_boost > current_boost_bar:
+		var rpm_spool_factor: float = clampf(current_rpm / full_spool_rpm, 0.35, 1.35)
+		current_boost_bar = move_toward(current_boost_bar, target_boost, spool_up_rate * rpm_spool_factor * delta)
+	else:
+		current_boost_bar = move_toward(current_boost_bar, target_boost, bypass_vent_rate * delta)
+
+
+# ------------------------------------------------------------------------------
+# 4. TORQUE CURVE & AXLE FORCE OUTPUT
+# ------------------------------------------------------------------------------
+func _compute_axle_drive_torque() -> void:
+	if shift_timer > 0.0 or current_rpm >= rev_limiter_cutoff_rpm:
+		net_drive_axle_torque_nm = 0.0
+		return
+
+	# Naturally aspirated base volumetric efficiency curve (0.0 to 1.0)
+	var na_ve_factor: float = _evaluate_rb26_base_ve(current_rpm)
+	var base_torque: float = base_peak_torque_nm * na_ve_factor
+
+	# Turbo multiplier: authentic off-boost lag (<3000 RPM) -> violent surge (3800-6800 RPM)
+	var boost_multiplier: float = 1.0
+	if current_boost_bar < 0.0:
+		# Off-boost low compression ratio (8.5:1) feel in vacuum
+		var vac_ratio: float = clampf(current_boost_bar / absf(min_vacuum_bar), -1.0, 0.0)
+		boost_multiplier = lerpf(0.82, 1.0, 1.0 + vac_ratio)
+	else:
+		var norm_boost: float = clampf(current_boost_bar / maxf(max_boost_bar, 0.01), 0.0, 1.0)
+		# Non-linear punch as twin T28 turbines hit peak efficiency island
+		var surge_band: float = 1.0
+		if current_rpm >= 3800.0 and current_rpm <= 6800.0:
+			surge_band = 1.08
+		boost_multiplier = lerpf(1.0, max_boost_torque_multiplier * surge_band, pow(norm_boost, 0.88))
+
+	var gross_crank_torque: float = base_torque * boost_multiplier * active_engine_throttle
+
+	# Off-throttle engine compression braking
+	var rpm_norm: float = clampf((current_rpm - idle_rpm) / (redline_rpm - idle_rpm), 0.0, 1.0)
+	var engine_drag_torque: float = (1.0 - active_engine_throttle) * engine_braking_coeff * rpm_norm
+
+	var net_crank_torque: float = gross_crank_torque - engine_drag_torque
+	var total_reduction: float = get_active_gear_ratio() * final_drive
+
+	net_drive_axle_torque_nm = net_crank_torque * total_reduction * drivetrain_efficiency
+
+
+## Analytical RB26DETT volumetric efficiency curve
+func _evaluate_rb26_base_ve(rpm: float) -> float:
+	if rpm < 2800.0:
+		# Low-end torque floor tuned to prevent stalling while retaining turbo lag character
+		return lerpf(0.54, 0.68, clampf((rpm - idle_rpm) / (2800.0 - idle_rpm), 0.0, 1.0))
+	elif rpm < 3800.0:
+		# Camshaft transition ramp
+		return lerpf(0.68, 0.90, (rpm - 2800.0) / 1000.0)
+	elif rpm <= 6800.0:
+		# Broad RB26 powerband plateau (3800 - 6800 RPM)
+		var band_t: float = (rpm - 3800.0) / 3000.0
+		return 0.90 + (0.10 * sin(band_t * PI))
+	else:
+		# High-RPM breathability up to 8200 RPM redline
+		var top_t: float = clampf((rpm - 6800.0) / (redline_rpm - 6800.0), 0.0, 1.0)
+		return lerpf(0.92, 0.81, top_t)
+
+
+func get_active_gear_ratio() -> float:
+	if is_reversing or current_gear == -1:
+		return -reverse_ratio
+	var idx: int = clampi(current_gear - 1, 0, gear_ratios.size() - 1)
+	return gear_ratios[idx]
 
 # ----------------------------------------------------------------------------- tires
 func _point_velocity(point: Vector3) -> Vector3:
@@ -476,12 +681,16 @@ func respawn_at(target: Transform3D) -> void:
 	throttle_input = 0.0
 	brake_input = 0.0
 	handbrake_input = 0.0
-	_gear_index = 0
+	current_gear = 1
 	gear_number = 1
+	current_rpm = idle_rpm
 	engine_rpm = idle_rpm
-	_shift_timer = 0.0
+	current_boost_bar = min_vacuum_bar
+	shift_timer = 0.0
 	_flip_timer = 0.0
 	_engine_force = 0.0
+	net_drive_axle_torque_nm = 0.0
+	net_wheel_brake_torque_nm = 0.0
 	is_reversing = false
 	_wheel_spin.fill(0.0)
 
