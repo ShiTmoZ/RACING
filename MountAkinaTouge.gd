@@ -77,6 +77,14 @@ func _ready() -> void:
 		call_deferred("_setup_radio_audio_system")
 		call_deferred("_setup_graphics_settings_manager")
 		call_deferred("_setup_vehicle_fleet_manager")
+		call_deferred("_setup_multiplayer_network_manager")
+
+
+func _setup_multiplayer_network_manager() -> void:
+	var net_script := load("res://TougeMultiplayerManager.gd")
+	if net_script != null:
+		var net_mgr = net_script.new()
+		add_child(net_mgr)
 
 
 func _setup_vehicle_fleet_manager() -> void:

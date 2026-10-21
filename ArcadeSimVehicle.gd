@@ -153,6 +153,8 @@ var tire_slip_velocities: Array[float] = [0.0, 0.0, 0.0, 0.0]
 var wheel_contact_points: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, Vector3.ZERO]
 var wheel_contact_normals: Array[Vector3] = [Vector3.UP, Vector3.UP, Vector3.UP, Vector3.UP]
 var wheel_is_grounded: Array[bool] = [false, false, false, false]
+const TougeDriftPhysicsSolverScript = preload("res://TougeDriftPhysicsSolver.gd")
+var drift_solver: RefCounted = null
 
 
 
@@ -161,6 +163,8 @@ func _ready() -> void:
 	can_sleep = false
 	contact_monitor = false
 	_spawn_transform = global_transform
+	if TougeDriftPhysicsSolverScript != null:
+		drift_solver = TougeDriftPhysicsSolverScript.new()
 	_resolve_wheel_nodes()
 	_build_wheel_flags()
 	_allocate_wheel_state()
@@ -284,11 +288,21 @@ func _update_motion_state() -> void:
 
 func _update_steering(delta: float) -> void:
 	var axis := Input.get_action_strength("steer_left") - Input.get_action_strength("steer_right")
-	var speed_ratio := clampf(absf(forward_speed) / steer_speed_reference, 0.0, 1.0)
-	var limit := lerpf(max_steer_angle, min_steer_angle, speed_ratio)
-	var goal := axis * limit
-	var rate := steer_rate if absf(goal) > absf(steer_angle) else steer_centering_rate
-	steer_angle = move_toward(steer_angle, goal, rate * delta)
+	if drift_solver != null:
+		steer_angle = drift_solver.compute_assisted_steer(
+			delta,
+			axis,
+			steer_angle,
+			forward_speed,
+			linear_velocity,
+			global_transform.basis
+		)
+	else:
+		var speed_ratio := clampf(absf(forward_speed) / steer_speed_reference, 0.0, 1.0)
+		var limit := lerpf(max_steer_angle, min_steer_angle, speed_ratio)
+		var goal := axis * limit
+		var rate := steer_rate if absf(goal) > absf(steer_angle) else steer_centering_rate
+		steer_angle = move_toward(steer_angle, goal, rate * delta)
 	for i in _wheel_steer.size():
 		_wheel_steer[i] = steer_angle if _is_front[i] == 1 else 0.0
 
@@ -560,48 +574,73 @@ func _apply_suspension_and_tires(delta: float) -> void:
 		var steer := _wheel_steer[i]
 		var wheel_forward := forward.rotated(Vector3.UP, steer).normalized()
 		var wheel_right := wheel_forward.cross(Vector3.UP).normalized()
-
-		var grip := tire_grip
-		var locked := handbrake_input > 0.1 and _is_front[i] == 0
-		if _is_front[i] == 0:
-			grip *= rear_grip_multiplier
-			if locked:
-				grip *= handbrake_grip_multiplier
-
 		var load := maxf(_wheel_force[i], 0.0)
-		var lateral_speed := velocity.dot(wheel_right)
-		var lateral_force := clampf(-lateral_speed * corner_mass * inv_delta * 0.95, -grip * load, grip * load)
-		apply_force(wheel_right * lateral_force, point - global_position)
 
-		var longitudinal_speed := velocity.dot(wheel_forward)
-		var longitudinal := 0.0
-		if _is_driven[i] == 1:
-			longitudinal += drive_per_wheel
+		if drift_solver != null:
+			var forces: Dictionary = drift_solver.compute_tire_forces(
+				i,
+				_is_front[i] == 1,
+				_is_driven[i] == 1,
+				load,
+				velocity,
+				wheel_forward,
+				wheel_right,
+				throttle_input if not is_reversing else 0.0,
+				brake_input if not is_reversing else throttle_input,
+				handbrake_input,
+				inv_delta
+			)
+			apply_force(forces.get("lateral_force", Vector3.ZERO), point - global_position)
+			apply_force(forces.get("longitudinal_force", Vector3.ZERO), point - global_position)
 
-		var brake_amount := throttle_input if is_reversing else brake_input
-		if locked:
-			brake_amount = 1.0
-		if brake_amount > 0.0:
-			var brake_cap := tire_grip * load * brake_amount
-			longitudinal += clampf(-longitudinal_speed * corner_mass * inv_delta, -brake_cap, brake_cap)
+			if i < tire_slip_velocities.size():
+				wheel_is_grounded[i] = true
+				wheel_contact_points[i] = point
+				wheel_contact_normals[i] = _wheel_normal[i]
+				var s_angle: float = absf(forces.get("slip_angle_rad", 0.0))
+				var s_ratio: float = absf(forces.get("slip_ratio", 0.0))
+				tire_slip_velocities[i] = s_angle * 18.0 + s_ratio * 12.0
+		else:
+			var grip := tire_grip
+			var locked := handbrake_input > 0.1 and _is_front[i] == 0
+			if _is_front[i] == 0:
+				grip *= rear_grip_multiplier
+				if locked:
+					grip *= handbrake_grip_multiplier
 
-		if absf(longitudinal_speed) > 0.05:
-			longitudinal -= signf(longitudinal_speed) * minf(rolling_resistance, absf(longitudinal_speed) * corner_mass * inv_delta)
+			var lateral_speed := velocity.dot(wheel_right)
+			var lateral_force := clampf(-lateral_speed * corner_mass * inv_delta * 0.95, -grip * load, grip * load)
+			apply_force(wheel_right * lateral_force, point - global_position)
 
-		var longitudinal_cap := tire_grip * 1.35 * load
-		longitudinal = clampf(longitudinal, -longitudinal_cap, longitudinal_cap)
-		apply_force(wheel_forward * longitudinal, point - global_position)
+			var longitudinal_speed := velocity.dot(wheel_forward)
+			var longitudinal := 0.0
+			if _is_driven[i] == 1:
+				longitudinal += drive_per_wheel
 
-		if i < tire_slip_velocities.size():
-			wheel_is_grounded[i] = true
-			wheel_contact_points[i] = point
-			wheel_contact_normals[i] = _wheel_normal[i]
-			var slip := absf(lateral_speed)
+			var brake_amount := throttle_input if is_reversing else brake_input
 			if locked:
-				slip += absf(longitudinal_speed) * 0.85
-			elif _is_driven[i] == 1 and throttle_input > 0.8 and speed_kmh < 30.0:
-				slip += (engine_rpm / redline_rpm) * 12.0
-			tire_slip_velocities[i] = slip
+				brake_amount = 1.0
+			if brake_amount > 0.0:
+				var brake_cap := tire_grip * load * brake_amount
+				longitudinal += clampf(-longitudinal_speed * corner_mass * inv_delta, -brake_cap, brake_cap)
+
+			if absf(longitudinal_speed) > 0.05:
+				longitudinal -= signf(longitudinal_speed) * minf(rolling_resistance, absf(longitudinal_speed) * corner_mass * inv_delta)
+
+			var longitudinal_cap := tire_grip * 1.35 * load
+			longitudinal = clampf(longitudinal, -longitudinal_cap, longitudinal_cap)
+			apply_force(wheel_forward * longitudinal, point - global_position)
+
+			if i < tire_slip_velocities.size():
+				wheel_is_grounded[i] = true
+				wheel_contact_points[i] = point
+				wheel_contact_normals[i] = _wheel_normal[i]
+				var slip := absf(lateral_speed)
+				if locked:
+					slip += absf(longitudinal_speed) * 0.85
+				elif _is_driven[i] == 1 and throttle_input > 0.8 and speed_kmh < 30.0:
+					slip += (engine_rpm / redline_rpm) * 12.0
+				tire_slip_velocities[i] = slip
 
 func _apply_anti_roll(body_up: Vector3, count: int) -> void:
 	var pairs := [[0, 1], [2, 3]]
