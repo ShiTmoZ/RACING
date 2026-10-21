@@ -405,7 +405,10 @@ func _apply_popup_state_to_model(model: Node3D, open_state: bool) -> void:
 		return
 	
 	# 1. Invoke direct methods on AE86TruenoModeler.gd if implemented
-	if model.has_method("toggle_popups"):
+	if model.has_method("toggle_headlights"):
+		model.call("toggle_headlights", open_state)
+		return
+	elif model.has_method("toggle_popups"):
 		model.call("toggle_popups")
 		return
 	elif model.has_method("set_popups_open"):

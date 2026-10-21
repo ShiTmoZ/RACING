@@ -185,6 +185,13 @@ func _physics_process(delta: float) -> void:
 			r34_model.is_reversing = is_reversing
 		if "headlights_on" in r34_model:
 			r34_model.headlights_on = true
+		if r34_model.has_method("set_brake_heat"):
+			var effective_brake: float = clampf(brake_input if not is_reversing else throttle_input, 0.0, 1.0)
+			r34_model.set_brake_heat(effective_brake)
+		if r34_model.has_method("set_drift_vfx"):
+			var lat_slip := absf(linear_velocity.dot(global_transform.basis.x))
+			var is_drifting := lat_slip > 2.6 or (handbrake_input > 0.5 and forward_speed > 4.0)
+			r34_model.set_drift_vfx(is_drifting, forward_speed * 3.6)
 
 # ----------------------------------------------------------------------------- setup
 var r34_model: Node3D = null
