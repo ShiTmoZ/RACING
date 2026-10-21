@@ -80,9 +80,21 @@ func _ready() -> void:
 		call_deferred("_setup_multiplayer_network_manager")
 		call_deferred("_setup_anime_post_process")
 		call_deferred("_setup_drift_referee_system")
+		call_deferred("_setup_atmosphere_and_weather")
 
 
 var _referee_mgr: Node = null
+var _atmosphere_mgr: Node = null
+
+func _setup_atmosphere_and_weather() -> void:
+	var atmo_script := load("res://AkinaDynamicAtmosphere.gd")
+	if atmo_script != null:
+		_atmosphere_mgr = atmo_script.new()
+		_atmosphere_mgr.name = "AkinaDynamicAtmosphere"
+		add_child(_atmosphere_mgr)
+		if _spawned_vehicle != null and _atmosphere_mgr.has_method("set_target_vehicle"):
+			_atmosphere_mgr.call("set_target_vehicle", _spawned_vehicle)
+
 
 func _setup_drift_referee_system() -> void:
 	var referee_script := load("res://TougeDriftRefereeSystem.gd")
@@ -1315,6 +1327,8 @@ func _spawn_player_vehicle() -> void:
 	add_child(_spawned_vehicle)
 	if _referee_mgr != null and _referee_mgr.has_method("set_target_vehicle"):
 		_referee_mgr.call("set_target_vehicle", _spawned_vehicle)
+	if _atmosphere_mgr != null and _atmosphere_mgr.has_method("set_target_vehicle"):
+		_atmosphere_mgr.call("set_target_vehicle", _spawned_vehicle)
 	_spawned_vehicle.global_transform = _spawn_transform
 	if _spawned_vehicle.has_method("set_spawn_transform"):
 		_spawned_vehicle.call("set_spawn_transform", _spawn_transform)
