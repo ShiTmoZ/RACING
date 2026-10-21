@@ -80,11 +80,21 @@ func _ready() -> void:
 		call_deferred("_setup_multiplayer_network_manager")
 		call_deferred("_setup_anime_post_process")
 		call_deferred("_setup_drift_referee_system")
+		call_deferred("_setup_digital_cluster_hud")
 		call_deferred("_setup_atmosphere_and_weather")
 
 
 var _referee_mgr: Node = null
+var _digital_cluster: CanvasLayer = null
 var _atmosphere_mgr: Node = null
+
+func _setup_digital_cluster_hud() -> void:
+	var cluster_script := load("res://InitialDDigitalClusterHUD.gd")
+	if cluster_script != null:
+		_digital_cluster = cluster_script.new() as CanvasLayer
+		if _digital_cluster != null:
+			_digital_cluster.name = "InitialDDigitalClusterHUD"
+			add_child(_digital_cluster)
 
 func _setup_atmosphere_and_weather() -> void:
 	var atmo_script := load("res://AkinaDynamicAtmosphere.gd")
@@ -1576,30 +1586,54 @@ func _setup_desktop_ui() -> void:
 	pause_box.add_child(btn_exit)
 
 
-func _process(delta: float) -> void:
-	if _spawned_vehicle == null or not is_instance_valid(_spawned_vehicle):
-		return
-	if _speed_val_label == null:
-		return
+func _process(_delta: float) -> void:
+	if _digital_cluster != null and is_instance_valid(_digital_cluster) and _spawned_vehicle != null and is_instance_valid(_spawned_vehicle):
+		var speed: float = 0.0
+		var rpm: float = 800.0
+		var max_rpm: float = 9000.0
+		var gear: int = 1
+		var throttle: float = 0.0
+		var brake: float = 0.0
 
-	var speed: float = 0.0
-	var rpm: float = 800.0
-	var gear_str: String = "1"
+		if "speed_kmh" in _spawned_vehicle:
+			speed = float(_spawned_vehicle.get("speed_kmh"))
+		elif _spawned_vehicle is RigidBody3D:
+			speed = (_spawned_vehicle as RigidBody3D).linear_velocity.length() * 3.6
 
-	if _spawned_vehicle != null and "speed_kmh" in _spawned_vehicle:
-		speed = float(_spawned_vehicle.get("speed_kmh"))
-		rpm = float(_spawned_vehicle.get("engine_rpm"))
-		var is_rev: bool = bool(_spawned_vehicle.get("is_reversing"))
-		gear_str = "R" if is_rev else str(_spawned_vehicle.get("gear_number"))
-	elif _spawned_vehicle is RigidBody3D:
-		var rb := _spawned_vehicle as RigidBody3D
-		speed = rb.linear_velocity.length() * 3.6
+		if "engine_rpm" in _spawned_vehicle:
+			rpm = float(_spawned_vehicle.get("engine_rpm"))
 
-	_speed_val_label.text = str(int(round(speed)))
-	if _gear_val_label != null:
-		_gear_val_label.text = "  GEAR " + gear_str
-	if _rpm_bar != null:
-		_rpm_bar.value = rpm
+		if "redline_rpm" in _spawned_vehicle:
+			max_rpm = float(_spawned_vehicle.get("redline_rpm"))
+
+		if "is_reversing" in _spawned_vehicle and bool(_spawned_vehicle.get("is_reversing")):
+			gear = -1
+		elif "gear_number" in _spawned_vehicle:
+			gear = int(_spawned_vehicle.get("gear_number"))
+
+		if "throttle_input" in _spawned_vehicle:
+			throttle = float(_spawned_vehicle.get("throttle_input"))
+		else:
+			throttle = Input.get_action_strength("accelerate")
+
+		if "brake_input" in _spawned_vehicle:
+			brake = float(_spawned_vehicle.get("brake_input"))
+		else:
+			brake = Input.get_action_strength("brake")
+
+		var drift_angle_deg: float = 0.0
+		var in_gutter: bool = false
+		if _referee_mgr != null and is_instance_valid(_referee_mgr):
+			if _referee_mgr.has_method("get_drift_angle_deg"):
+				drift_angle_deg = float(_referee_mgr.call("get_drift_angle_deg"))
+			if _referee_mgr.has_method("is_gutter_hooked"):
+				in_gutter = bool(_referee_mgr.call("is_gutter_hooked"))
+
+		_digital_cluster.update_telemetry(speed, rpm, max_rpm, gear, throttle, brake, drift_angle_deg, in_gutter)
+
+	if _speed_val_label != null and _spawned_vehicle != null and is_instance_valid(_spawned_vehicle):
+		var spd_val: float = float(_spawned_vehicle.get("speed_kmh")) if "speed_kmh" in _spawned_vehicle else 0.0
+		_speed_val_label.text = str(int(round(spd_val)))
 
 
 func _input(event: InputEvent) -> void:

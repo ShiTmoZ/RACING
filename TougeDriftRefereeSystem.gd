@@ -1228,3 +1228,9 @@ func get_water_level_percent() -> float:
 
 func get_current_rank_title() -> String:
 	return RANK_TITLES[_current_rank_idx]
+
+func get_drift_angle_deg() -> float:
+	return _signed_slip_deg
+
+func is_gutter_hooked() -> bool:
+	return _is_gutter_hooked

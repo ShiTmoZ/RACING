@@ -26,7 +26,7 @@ jobs:
           if [[ "$REF" == refs/tags/* ]]; then
             VERSION="${REF#refs/tags/}"
           else
-            VERSION="v1.8.2"
+            VERSION="v1.8.3"
           fi
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "Target Release Version: $VERSION"
