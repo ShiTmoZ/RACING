@@ -164,6 +164,8 @@ func _ready() -> void:
 	can_sleep = false
 	contact_monitor = false
 	_spawn_transform = global_transform
+	center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM
+	center_of_mass = Vector3(0.0, -0.35, 0.0)
 	if TougeDriftPhysicsSolverScript != null:
 		drift_solver = TougeDriftPhysicsSolverScript.new()
 	_resolve_wheel_nodes()
@@ -181,7 +183,6 @@ func _physics_process(delta: float) -> void:
 	_update_drivetrain(delta)
 	_apply_suspension_and_tires(delta)
 	_apply_aero()
-	_apply_chassis_stabilization(delta)
 	_update_wheel_visuals(delta)
 	_check_recovery(delta)
 	if r34_model != null:
@@ -593,8 +594,10 @@ func _apply_suspension_and_tires(delta: float) -> void:
 				handbrake_input,
 				inv_delta
 			)
-			apply_force(forces.get("lateral_force", Vector3.ZERO), point - global_position)
-			apply_force(forces.get("longitudinal_force", Vector3.ZERO), point - global_position)
+			var contact_arm := point - global_position
+			var lateral_arm := Vector3(contact_arm.x, 0.0, contact_arm.z)
+			apply_force(forces.get("lateral_force", Vector3.ZERO), lateral_arm)
+			apply_force(forces.get("longitudinal_force", Vector3.ZERO), contact_arm)
 
 			if i < tire_slip_velocities.size():
 				wheel_is_grounded[i] = true
@@ -671,21 +674,6 @@ func _apply_aero() -> void:
 	var up := global_transform.basis.y.normalized()
 	apply_central_force(-velocity / speed * drag_coefficient * speed * speed)
 	apply_central_force(-up * downforce_coefficient * speed * speed)
-
-func _apply_chassis_stabilization(_delta: float) -> void:
-	if drift_solver != null and drift_solver.has_method("compute_chassis_stabilization_torque"):
-		var is_drift: bool = false
-		if drift_solver.has_method("get_drift_telemetry"):
-			var telem: Dictionary = drift_solver.get_drift_telemetry()
-			is_drift = bool(telem.get("is_drifting", false))
-		var stab_torque: Vector3 = drift_solver.compute_chassis_stabilization_torque(
-			global_transform.basis,
-			linear_velocity,
-			angular_velocity,
-			steer_input,
-			is_drift
-		)
-		apply_torque(stab_torque * (mass * 1.5))
 
 # ----------------------------------------------------------------------------- visuals
 func _update_wheel_visuals(delta: float) -> void:
