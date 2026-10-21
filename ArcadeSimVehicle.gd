@@ -85,6 +85,7 @@ signal gear_changed(new_gear: int)
 
 # ----------------------------------------------------------------------------- state
 var steer_angle: float = 0.0
+var steer_input: float = 0.0
 var throttle_input: float = 0.0
 var brake_input: float = 0.0
 var handbrake_input: float = 0.0
@@ -180,6 +181,7 @@ func _physics_process(delta: float) -> void:
 	_update_drivetrain(delta)
 	_apply_suspension_and_tires(delta)
 	_apply_aero()
+	_apply_chassis_stabilization(delta)
 	_update_wheel_visuals(delta)
 	_check_recovery(delta)
 	if r34_model != null:
@@ -268,6 +270,7 @@ func _allocate_wheel_state() -> void:
 
 # ----------------------------------------------------------------------------- input
 func _read_input() -> void:
+	steer_input = Input.get_action_strength("steer_left") - Input.get_action_strength("steer_right")
 	throttle_input = Input.get_action_strength("accelerate")
 	brake_input = Input.get_action_strength("brake")
 	handbrake_input = Input.get_action_strength("handbrake")
@@ -668,6 +671,21 @@ func _apply_aero() -> void:
 	var up := global_transform.basis.y.normalized()
 	apply_central_force(-velocity / speed * drag_coefficient * speed * speed)
 	apply_central_force(-up * downforce_coefficient * speed * speed)
+
+func _apply_chassis_stabilization(_delta: float) -> void:
+	if drift_solver != null and drift_solver.has_method("compute_chassis_stabilization_torque"):
+		var is_drift: bool = false
+		if drift_solver.has_method("get_drift_telemetry"):
+			var telem: Dictionary = drift_solver.get_drift_telemetry()
+			is_drift = bool(telem.get("is_drifting", false))
+		var stab_torque: Vector3 = drift_solver.compute_chassis_stabilization_torque(
+			global_transform.basis,
+			linear_velocity,
+			angular_velocity,
+			steer_input,
+			is_drift
+		)
+		apply_torque(stab_torque * (mass * 1.5))
 
 # ----------------------------------------------------------------------------- visuals
 func _update_wheel_visuals(delta: float) -> void:

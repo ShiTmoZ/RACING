@@ -48,6 +48,20 @@ var power_oversteer_authority: float = 0.42
 var handbrake_lateral_retention: float = 0.34
 var tire_relaxation_length: float = 0.18
 
+# Tire & Surface Grip Constants
+var base_front_lateral_grip: float = 26.0
+var base_rear_lateral_grip: float = 28.0
+var drift_rear_lateral_grip: float = 15.5
+var lateral_velocity_damping: float = 6.5
+
+# Yaw & Drift Stabilization Constants
+var grip_yaw_authority: float = 14.5
+var drift_yaw_authority: float = 19.0
+var grip_yaw_damping: float = 11.5
+var drift_yaw_damping: float = 8.2
+var slip_aligning_stiffness: float = 16.0
+var max_safe_drift_angle_rad: float = deg_to_rad(42.0)
+
 # --- INTERNAL STATE ---
 var _prev_slip_angle_rad: float = 0.0
 var _body_slip_rate: float = 0.0
@@ -278,7 +292,8 @@ func compute_tire_forces(
 		var kamm_envelope: float = sqrt(1.0 - long_usage_sq)
 
 		# Combine geometric Kamm circle with dynamic power-oversteer breakaway
-		kamm_lateral_scale = clampf(kamm_envelope - wheelspin_oversteer, 0.28, 1.0)
+		# Retain at least 58% lateral bite under throttle to prevent ice-sliding
+		kamm_lateral_scale = clampf(kamm_envelope - wheelspin_oversteer, 0.58, 1.0)
 
 		# Boost forward drive bite slightly during sustained drift so throttle can push car through hairpins
 		if abs_slip_angle > drift_angle_threshold_rad:
@@ -353,3 +368,100 @@ func _evaluate_pacejka_plateau_curve(abs_alpha_rad: float, plateau_grip_ratio: f
 	else:
 		var excess: float = clampf((abs_alpha_rad - extreme_slip_angle_rad) / deg_to_rad(35.0), 0.0, 1.0)
 		return lerpf(plateau_grip_ratio * 0.90, plateau_grip_ratio * 0.72, excess)
+
+
+# ==============================================================================
+# 4. CHASSIS STABILIZATION & PROGRESSIVE COUNTER-STEER YAW DYNAMICS
+# ==============================================================================
+## Computes stabilizing chassis torque (pitch, yaw, roll) expected by MountAkinaTouge & ArcadeSimVehicle.
+## Prevents uncontrollable spinouts under throttle and keeps the chassis planted.
+func compute_chassis_stabilization_torque(
+	car_basis: Basis,
+	linear_velocity: Vector3,
+	angular_velocity: Vector3,
+	steer_input: float,
+	is_drifting: bool
+) -> Vector3:
+	var up := car_basis.y.normalized()
+	var forward := -car_basis.z.normalized()
+	var right := car_basis.x.normalized()
+
+	# Project velocity onto the chassis horizontal plane
+	var horiz_vel := linear_velocity - up * linear_velocity.dot(up)
+	var speed := horiz_vel.length()
+
+	var fwd_speed := horiz_vel.dot(forward)
+	var lat_speed := horiz_vel.dot(right)
+	var current_yaw_rate := angular_velocity.dot(up)
+
+	# 1. Roll & Pitch Horizon Stabilization (prevents chassis tipping on aggressive kerbs/gutters)
+	var roll_error := right.y
+	var pitch_error := forward.y
+	var roll_rate := angular_velocity.dot(forward)
+	var pitch_rate := angular_velocity.dot(right)
+
+	var roll_Correction := (-roll_error * 42.0 - roll_rate * 8.5) * forward
+	var pitch_Correction := (-pitch_error * 36.0 - pitch_rate * 7.5) * right
+
+	# Low-speed cutoff to avoid stationary jitter
+	if speed < 1.25:
+		var idle_yaw_damp := -current_yaw_rate * 10.0 * up
+		return idle_yaw_damp + roll_Correction + pitch_Correction
+
+	# 2. Compute Slip Angle (angle between vehicle heading and velocity vector)
+	var slip_angle := atan2(lat_speed, maxf(absf(fwd_speed), 2.0))
+	var reverse_sign := -1.0 if fwd_speed < -0.5 else 1.0
+	var speed_authority := clampf(speed / 16.0, 0.25, 1.35)
+
+	var net_yaw_accel := 0.0
+
+	if not is_drifting:
+		# PLANTED GRIP MODE (Forza Horizon / Initial D Arcade Responsiveness)
+		var target_yaw_rate := steer_input * 2.15 * speed_authority * reverse_sign
+		var yaw_rate_error := target_yaw_rate - current_yaw_rate
+		var weathervane_restore := slip_angle * (slip_aligning_stiffness * 1.45) * speed_authority
+		net_yaw_accel = (yaw_rate_error * grip_yaw_authority) + weathervane_restore
+	else:
+		# HIGH-ANGLE TOUGE DRIFT MODE (Progressive Counter-Steer & Spin Arrestor)
+		var is_counter_steering := (slip_angle * steer_input) > 0.05
+		var steer_gain := 3.1 if is_counter_steering else 2.25
+		var desired_yaw_rate := steer_input * steer_gain * speed_authority * reverse_sign
+		var aligning_torque := slip_angle * slip_aligning_stiffness * speed_authority
+
+		var abs_slip := absf(slip_angle)
+		var over_angle_restore := 0.0
+		if abs_slip > max_safe_drift_angle_rad:
+			var excess_angle := abs_slip - max_safe_drift_angle_rad
+			over_angle_restore = signf(slip_angle) * (excess_angle * excess_angle * 68.0 + excess_angle * 28.0)
+
+		var effective_damping := drift_yaw_damping * (1.35 if is_counter_steering else 1.0)
+		var yaw_error := desired_yaw_rate - current_yaw_rate
+		net_yaw_accel = (yaw_error * effective_damping) + aligning_torque + over_angle_restore
+
+	net_yaw_accel = clampf(net_yaw_accel, -45.0, 45.0)
+	var yaw_torque := up * net_yaw_accel
+	return yaw_torque + roll_Correction + pitch_Correction
+
+
+## Computes the anti-ice lateral tire counter-force (m/s^2 acceleration)
+func compute_lateral_grip_acceleration(
+	car_basis: Basis,
+	linear_velocity: Vector3,
+	throttle_input: float,
+	is_drifting: bool,
+	in_gutter: bool
+) -> Vector3:
+	var right := car_basis.x.normalized()
+	var lat_speed := linear_velocity.dot(right)
+
+	# Decouple throttle from destroying lateral traction
+	var throttle_traction_loss := clampf(throttle_input * 0.35, 0.0, 0.35) if is_drifting else clampf(throttle_input * 0.1, 0.0, 0.1)
+	var target_grip := drift_rear_lateral_grip if is_drifting else base_rear_lateral_grip
+	var effective_grip := target_grip * (1.0 - throttle_traction_loss)
+
+	if in_gutter:
+		effective_grip *= 1.45
+
+	var desired_lat_decel := -lat_speed * lateral_velocity_damping
+	var clamped_lat_accel := clampf(desired_lat_decel, -effective_grip, effective_grip)
+	return right * clamped_lat_accel
