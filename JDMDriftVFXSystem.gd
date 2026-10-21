@@ -65,6 +65,8 @@ class WheelVFXChannel:
 	var buffer_head: int = 0
 	var buffer_count: int = 0
 	var was_skidding: bool = false
+	var mesh_dirty: bool = false
+	var last_cleanup_time: float = 0.0
 	var last_left_vtx: Vector3 = Vector3.ZERO
 	var last_right_vtx: Vector3 = Vector3.ZERO
 	var last_contact_pos: Vector3 = Vector3.ZERO
@@ -722,8 +724,9 @@ func _update_wheels_vfx(speed_mps: float, slip_angle_deg: float, telemetry: Dict
 			ch.smoke_emitter.amount_ratio = 0.0
 			ch.was_skidding = false
 
-		# Rebuild ImmediateMesh only when active segments exist within the 15s window
-		_rebuild_wheel_skid_mesh(ch, now_sec)
+		# Rebuild ImmediateMesh only when new quads were committed or periodically to evict expired quads
+		if ch.mesh_dirty or (ch.buffer_count > 0 and (now_sec - ch.last_cleanup_time) > 2.0):
+			_rebuild_wheel_skid_mesh(ch, now_sec)
 
 
 func _commit_skidmark_point(ch: WheelVFXChannel, contact_pos: Vector3, normal: Vector3, intensity: float, now_sec: float) -> void:
@@ -766,6 +769,7 @@ func _commit_skidmark_point(ch: WheelVFXChannel, contact_pos: Vector3, normal: V
 
 	ch.buffer_head = (ch.buffer_head + 1) % max_skid_segments_per_wheel
 	ch.buffer_count = mini(ch.buffer_count + 1, max_skid_segments_per_wheel)
+	ch.mesh_dirty = true
 
 	ch.last_contact_pos = elevated_pos
 	ch.last_left_vtx = cur_left
@@ -773,7 +777,11 @@ func _commit_skidmark_point(ch: WheelVFXChannel, contact_pos: Vector3, normal: V
 
 
 func _rebuild_wheel_skid_mesh(ch: WheelVFXChannel, now_sec: float) -> void:
+	ch.mesh_dirty = false
+	ch.last_cleanup_time = now_sec
+
 	if ch.buffer_count == 0:
+		ch.skid_immediate_mesh.clear_surfaces()
 		return
 
 	var imm := ch.skid_immediate_mesh

@@ -1281,6 +1281,8 @@ func _spawn_player_vehicle() -> void:
 	_spawned_vehicle.name = "SkylineGTR_R34"
 	add_child(_spawned_vehicle)
 	_spawned_vehicle.global_transform = _spawn_transform
+	if _spawned_vehicle.has_method("set_spawn_transform"):
+		_spawned_vehicle.call("set_spawn_transform", _spawn_transform)
 	
 	# Attach GPUParticlesAttractorSphere3D to the R34 so falling Sakura petals swirl in its wake
 	var wake_attractor := GPUParticlesAttractorSphere3D.new()

@@ -1,128 +1,226 @@
 class_name JDMRadioAudioSystem
 extends Node
 
-## Mount Akina Touge - Live Internet Radio Streaming Engine & Kenwood VFD HUD
-## Features a dedicated background HTTPClient network worker thread, MPEG frame-aligned
-## ring buffering, dual-buffered AudioStreamMP3 playback, and a 12-band real-time
-## AudioEffectSpectrumAnalyzer fluorescent head-unit display.
+## Production Internet Radio Live Streaming Engine for Godot 4.3 (Vulkan Forward+)
+## Bypasses HTTPClient Content-Length / chunked stream bugs via raw StreamPeerTCP & StreamPeerTLS.
+## Features inline Icecast metadata demuxing, MPEG sync-word frame alignment, seamless dual-player
+## crossfade queuing, and a procedural 90s Kenwood 1-DIN Vacuum Fluorescent Display (VFD) HUD.
 
-signal station_changed(station_index: int, station_data: Dictionary)
-signal stream_status_changed(status_text: String)
-signal radio_power_toggled(is_powered: bool)
+signal station_changed(station_index: int, station_name: String)
+signal track_title_updated(title: String)
+signal stream_state_changed(state_name: String)
+signal radio_power_toggled(is_on: bool)
 
-const RADIO_BUS_NAME: String = "JDMRadioBus"
-const CHUNK_TARGET_BYTES: int = 36864          # ~2.3 seconds at 128 kbps MP3
-const PREBUFFER_THRESHOLD_BYTES: int = 57344   # ~3.5 seconds initial jitter buffer
-const MAX_QUEUED_CHUNKS: int = 12
-const SPECTRUM_BANDS: int = 12
+enum StreamState {
+	OFF,
+	CONNECTING,
+	TLS_HANDSHAKE,
+	SENDING_REQUEST,
+	READING_HEADERS,
+	BUFFERING,
+	PLAYING,
+	RECONNECTING,
+	ERROR
+}
 
-const STATIONS: Array[Dictionary] = [
-	{
-		"freq": "88.6 FM",
-		"name": "J-POP PROJECT TOKYO",
-		"sub": "OFFICIAL JAPANESE HITS & ANIME",
-		"url": "http://kathy.torontocast.com:3560/stream"
-	},
+enum DemuxState {
+	AUDIO_DATA,
+	META_LENGTH,
+	META_STRING
+}
+
+# --- Configuration & Tuning Constants ---
+const PREBUFFER_THRESHOLD: int = 98304     # 96 KB initial pre-buffer before playback starts
+const SLICE_BYTE_SIZE: int = 65536         # 64 KB per AudioStreamMP3 slice (~4s at 128kbps)
+const MAX_AUDIO_BUFFER_SIZE: int = 1048576 # 1 MB cap to prevent runaway memory usage
+const CROSSFADE_TIME: float = 0.045        # 45ms overlap to eliminate MP3 boundary clicks
+const SOCKET_READ_CAP: int = 32768         # Max bytes read per frame to guarantee 0ms main-thread stall
+const CONNECTION_TIMEOUT: float = 8.0      # Seconds before forcing reconnect on dead socket
+const MAX_REDIRECTS: int = 4               # Maximum HTTP 301/302 hops
+
+# --- Verified Live Station Presets ---
+var stations: Array[Dictionary] = [
 	{
 		"freq": "94.2 FM",
-		"name": "CITY POP ONE 1986",
-		"sub": "80s TOKYO MIDNIGHT CITY POP",
-		"url": "http://65.21.61.215:8000/citypopone"
+		"name": "NIGHTWAVE PLAZA",
+		"url": "https://radio.plaza.one/mp3",
+		"genre": "80s VAPORWAVE"
 	},
 	{
 		"freq": "102.5 FM",
 		"name": "JAPAN RADIO LIVE",
-		"sub": "J-ROCK & TOUGE EUROBEAT / BEATS",
-		"url": "https://stream.japanradio.de/live"
+		"url": "https://stream.japanradio.de/live",
+		"genre": "JPOP / EUROBEAT"
+	},
+	{
+		"freq": "88.6 FM",
+		"name": "SOMA VAPORWAVES",
+		"url": "https://ice2.somafm.com/vaporwaves-128-mp3",
+		"genre": "TOUGE CHILL"
+	},
+	{
+		"freq": "89.4 FM",
+		"name": "J-Pop Project Tokyo",
+		"url": "http://kathy.torontocast.com:3560/stream",
+		"genre": "J-POP / ANIME"
+	},
+	{
+		"freq": "91.8 FM",
+		"name": "City Pop One",
+		"url": "http://65.21.61.215:8000/citypopone",
+		"genre": "80s TOKYO CITY POP"
+	},
+	{
+		"freq": "105.4 FM",
+		"name": "Groove Salad Touge",
+		"url": "https://ice2.somafm.com/groovesalad-128-mp3",
+		"genre": "AMBIENT CHILL"
 	}
 ]
 
-const FREQ_RANGES: Array[Vector2] = [
-	Vector2(20.0, 45.0),
-	Vector2(45.0, 90.0),
-	Vector2(90.0, 180.0),
-	Vector2(180.0, 320.0),
-	Vector2(320.0, 600.0),
-	Vector2(600.0, 1100.0),
-	Vector2(1100.0, 2000.0),
-	Vector2(2000.0, 3600.0),
-	Vector2(3600.0, 6200.0),
-	Vector2(6200.0, 10000.0),
-	Vector2(10000.0, 14500.0),
-	Vector2(14500.0, 20000.0)
-]
-
-# Playback & Audio Bus State
-var current_station_index: int = 0
-var master_volume: float = 0.80
+# --- Radio State ---
 var is_powered_on: bool = true
+var is_hud_visible: bool = true
+var current_station_idx: int = 0
+var master_volume_linear: float = 0.75
+var state: StreamState = StreamState.OFF
 
+# --- Network & Socket State ---
+var _tcp: StreamPeerTCP = null
+var _tls: StreamPeerTLS = null
+var _active_peer: StreamPeer = null
+var _use_tls: bool = false
+var _parsed_host: String = ""
+var _parsed_port: int = 80
+var _parsed_path: String = "/"
+var _redirect_count: int = 0
+
+var _header_buffer: PackedByteArray = PackedByteArray()
+var _audio_ring_buffer: PackedByteArray = PackedByteArray()
+var _meta_buffer: PackedByteArray = PackedByteArray()
+
+# --- Icecast Metadata & Protocol Variables ---
+var icy_name: String = ""
+var icy_genre: String = ""
+var icy_bitrate: int = 128
+var icy_metaint: int = 0
+var current_track_title: String = "WAITING FOR STREAM..."
+
+var _demux_state: DemuxState = DemuxState.AUDIO_DATA
+var _bytes_until_meta: int = 0
+var _meta_bytes_remaining: int = 0
+
+# --- Reconnection & Watchdog Timers ---
+var _state_timer: float = 0.0
+var _data_watchdog: float = 0.0
+var _reconnect_attempts: int = 0
+var _reconnect_wait_time: float = 2.0
+var _reconnect_accum: float = 0.0
+
+# --- Audio Engine Nodes & Playback Tracking ---
+var _radio_bus_name: String = "JDMRadioBus"
 var _radio_bus_idx: int = -1
 var _spectrum_instance: AudioEffectSpectrumAnalyzerInstance = null
-var _player_a: AudioStreamPlayer
-var _player_b: AudioStreamPlayer
-var _active_player: AudioStreamPlayer
-var _standby_player: AudioStreamPlayer
-var _is_prebuffering: bool = true
 
-# Background Streaming Thread & Synchronization Primitives
-var _stream_thread: Thread
-var _mutex: Mutex
-var _semaphore: Semaphore
-var _thread_should_exit: bool = false
-var _requested_station_idx: int = 0
-var _station_switch_requested: bool = false
-var _power_state_shared: bool = true
+var _player_a: AudioStreamPlayer = null
+var _player_b: AudioStreamPlayer = null
+var _active_player: AudioStreamPlayer = null
+var _standby_player: AudioStreamPlayer = null
 
-# Thread-Safe Audio Chunk Queue & Telemetry
-var _ready_mp3_chunks: Array[AudioStreamMP3] = []
-var _queued_byte_estimate: int = 0
-var _network_status_shared: String = "BUFFERING // CONNECTING"
+var _active_slice_duration: float = 0.0
+var _active_slice_elapsed: float = 0.0
+var _is_crossfading: bool = false
+var _crossfade_elapsed: float = 0.0
 
-# Kenwood VFD UI Nodes & Spectrum State
-var _hud_layer: CanvasLayer
-var _vfd_canvas: Control
-var _band_levels: PackedFloat32Array = PackedFloat32Array()
-var _band_peaks: PackedFloat32Array = PackedFloat32Array()
-var _band_peak_hold_timers: PackedFloat32Array = PackedFloat32Array()
-var _status_cached: String = "BUFFERING // CONNECTING"
+# --- Kenwood VFD UI Layer ---
+var _canvas_layer: CanvasLayer = null
+var _vfd_control: KenwoodVFDDisplay = null
 
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	_setup_audio_bus()
+	_setup_audio_players()
+	_setup_vfd_hud()
 	
-	_band_levels.resize(SPECTRUM_BANDS)
-	_band_peaks.resize(SPECTRUM_BANDS)
-	_band_peak_hold_timers.resize(SPECTRUM_BANDS)
-	_band_levels.fill(0.0)
-	_band_peaks.fill(0.0)
-	_band_peak_hold_timers.fill(0.0)
-	
-	_setup_audio_bus_and_players()
-	_build_kenwood_vfd_hud()
-	
-	_mutex = Mutex.new()
-	_semaphore = Semaphore.new()
-	_stream_thread = Thread.new()
-	_requested_station_idx = current_station_index
-	_station_switch_requested = true
-	_stream_thread.start(_network_thread_main)
-	_semaphore.post()
+	if is_powered_on:
+		_connect_to_station(current_station_idx, true)
 
 
 func _exit_tree() -> void:
-	if _mutex:
-		_mutex.lock()
-		_thread_should_exit = true
-		_mutex.unlock()
-	if _semaphore:
-		_semaphore.post()
-	if _stream_thread and _stream_thread.is_started():
-		_stream_thread.wait_to_finish()
+	_close_sockets()
 
 
-func _unhandled_input(event: InputEvent) -> void:
-	if not (event is InputEventKey) or not event.pressed or event.echo:
+# ==============================================================================
+# 1. INITIALIZATION: AUDIO BUS, PLAYERS, AND VFD HUD
+# ==============================================================================
+
+func _setup_audio_bus() -> void:
+	_radio_bus_idx = AudioServer.get_bus_index(_radio_bus_name)
+	if _radio_bus_idx == -1:
+		AudioServer.add_bus()
+		_radio_bus_idx = AudioServer.bus_count - 1
+		AudioServer.set_bus_name(_radio_bus_idx, _radio_bus_name)
+		AudioServer.set_bus_send(_radio_bus_idx, "Master")
+		
+		var spec_effect := AudioEffectSpectrumAnalyzer.new()
+		spec_effect.buffer_length = 0.1
+		spec_effect.fft_size = AudioEffectSpectrumAnalyzer.FFT_SIZE_1024
+		AudioServer.add_bus_effect(_radio_bus_idx, spec_effect, 0)
+	else:
+		var has_spec := false
+		for i in range(AudioServer.get_bus_effect_count(_radio_bus_idx)):
+			if AudioServer.get_bus_effect(_radio_bus_idx, i) is AudioEffectSpectrumAnalyzer:
+				has_spec = true
+				break
+		if not has_spec:
+			var spec_effect := AudioEffectSpectrumAnalyzer.new()
+			spec_effect.buffer_length = 0.1
+			spec_effect.fft_size = AudioEffectSpectrumAnalyzer.FFT_SIZE_1024
+			AudioServer.add_bus_effect(_radio_bus_idx, spec_effect, 0)
+	
+	_spectrum_instance = AudioServer.get_bus_effect_instance(_radio_bus_idx, 0) as AudioEffectSpectrumAnalyzerInstance
+	_apply_master_volume()
+
+
+func _setup_audio_players() -> void:
+	_player_a = AudioStreamPlayer.new()
+	_player_a.name = "RadioStreamPlayerA"
+	_player_a.bus = _radio_bus_name
+	add_child(_player_a)
+	
+	_player_b = AudioStreamPlayer.new()
+	_player_b.name = "RadioStreamPlayerB"
+	_player_b.bus = _radio_bus_name
+	add_child(_player_b)
+	
+	_active_player = _player_a
+	_standby_player = _player_b
+
+
+func _setup_vfd_hud() -> void:
+	_canvas_layer = CanvasLayer.new()
+	_canvas_layer.layer = 95
+	_canvas_layer.name = "KenwoodVFDCanvas"
+	add_child(_canvas_layer)
+	
+	_vfd_control = KenwoodVFDDisplay.new(self)
+	_vfd_control.name = "KenwoodVFDControl"
+	_vfd_control.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_vfd_control.offset_left = -468.0
+	_vfd_control.offset_right = -18.0
+	_vfd_control.offset_top = 18.0
+	_vfd_control.offset_bottom = 153.0
+	_vfd_control.size = Vector2(450.0, 135.0)
+	_canvas_layer.add_child(_vfd_control)
+
+
+# ==============================================================================
+# 2. INPUT HANDLING (HOTKEYS)
+# ==============================================================================
+
+func _unhandled_key_input(event: InputEvent) -> void:
+	if not (event is InputEventKey and event.pressed and not event.echo):
 		return
 	
 	var key_event := event as InputEventKey
@@ -130,637 +228,857 @@ func _unhandled_input(event: InputEvent) -> void:
 	
 	match code:
 		KEY_M:
-			toggle_power_mute()
+			toggle_power()
 			get_viewport().set_input_as_handled()
-		KEY_N:
-			next_station()
+		
+		KEY_R:
+			if key_event.shift_pressed:
+				is_hud_visible = not is_hud_visible
+				_canvas_layer.visible = is_hud_visible
+				get_viewport().set_input_as_handled()
+		
+		KEY_T, KEY_N:
+			if not is_powered_on:
+				toggle_power()
+			elif key_event.shift_pressed:
+				previous_station()
+			else:
+				next_station()
 			get_viewport().set_input_as_handled()
+		
 		KEY_B:
-			previous_station()
+			if not is_powered_on:
+				toggle_power()
+			else:
+				previous_station()
 			get_viewport().set_input_as_handled()
-		KEY_PAGEUP:
-			adjust_volume(0.05)
+		
+		KEY_BRACKETLEFT, KEY_MINUS, KEY_PAGEDOWN:
+			set_radio_volume(master_volume_linear - 0.05)
 			get_viewport().set_input_as_handled()
-		KEY_PAGEDOWN:
-			adjust_volume(-0.05)
+		
+		KEY_BRACKETRIGHT, KEY_EQUAL, KEY_PAGEUP:
+			set_radio_volume(master_volume_linear + 0.05)
 			get_viewport().set_input_as_handled()
-
-
-func _process(delta: float) -> void:
-	_service_dual_buffer_playback()
-	_update_spectrum_analyzer(delta)
-	if is_instance_valid(_vfd_canvas):
-		_vfd_canvas.queue_redraw()
 
 
 # ==============================================================================
-# PUBLIC RADIO CONTROLS API
+# 3. PUBLIC CONTROL API
 # ==============================================================================
 
-func toggle_power_mute() -> void:
+func toggle_power() -> void:
 	is_powered_on = not is_powered_on
-	_apply_volume_to_bus()
-	
-	_mutex.lock()
-	_power_state_shared = is_powered_on
-	if not is_powered_on:
-		_ready_mp3_chunks.clear()
-		_queued_byte_estimate = 0
-		_network_status_shared = "STANDBY // MUTED"
-	else:
-		_station_switch_requested = true
-		_requested_station_idx = current_station_index
-		_network_status_shared = "TUNING // BUFFERING"
-	_mutex.unlock()
-	
-	if not is_powered_on:
-		_player_a.stop()
-		_player_b.stop()
-		_is_prebuffering = true
-	else:
-		_semaphore.post()
-	
 	radio_power_toggled.emit(is_powered_on)
+	if is_powered_on:
+		_reconnect_attempts = 0
+		_connect_to_station(current_station_idx, true)
+	else:
+		_close_sockets()
+		_stop_players()
+		_set_state(StreamState.OFF)
+		current_track_title = "UNIT OFF"
+		if _vfd_control:
+			_vfd_control.queue_redraw()
 
 
 func next_station() -> void:
-	var next_idx: int = posmod(current_station_index + 1, STATIONS.size())
-	select_station(next_idx)
+	current_station_idx = (current_station_idx + 1) % stations.size()
+	_reconnect_attempts = 0
+	_connect_to_station(current_station_idx, true)
 
 
 func previous_station() -> void:
-	var prev_idx: int = posmod(current_station_index - 1, STATIONS.size())
-	select_station(prev_idx)
+	current_station_idx = (current_station_idx - 1 + stations.size()) % stations.size()
+	_reconnect_attempts = 0
+	_connect_to_station(current_station_idx, true)
 
 
-func select_station(index: int) -> void:
-	current_station_index = posmod(index, STATIONS.size())
-	if not is_powered_on:
-		is_powered_on = true
-		_apply_volume_to_bus()
-	
-	_player_a.stop()
-	_player_b.stop()
-	_is_prebuffering = true
-	
-	_mutex.lock()
-	_power_state_shared = true
-	_requested_station_idx = current_station_index
-	_station_switch_requested = true
-	_ready_mp3_chunks.clear()
-	_queued_byte_estimate = 0
-	_network_status_shared = "TUNING // " + STATIONS[current_station_index]["freq"]
-	_mutex.unlock()
-	
-	_semaphore.post()
-	station_changed.emit(current_station_index, STATIONS[current_station_index])
+func set_radio_volume(linear_val: float) -> void:
+	master_volume_linear = clampf(linear_val, 0.0, 1.0)
+	_apply_master_volume()
+	if _vfd_control:
+		_vfd_control.trigger_volume_overlay()
 
 
-func adjust_volume(delta_step: float) -> void:
-	master_volume = clampf(master_volume + delta_step, 0.0, 1.0)
-	if master_volume > 0.0 and not is_powered_on:
-		is_powered_on = true
-		_mutex.lock()
-		_power_state_shared = true
-		_station_switch_requested = true
-		_mutex.unlock()
-		_semaphore.post()
-	_apply_volume_to_bus()
+func _apply_master_volume() -> void:
+	if _radio_bus_idx != -1:
+		var db := linear_to_db(maxf(master_volume_linear, 0.0001))
+		AudioServer.set_bus_volume_db(_radio_bus_idx, db)
+		AudioServer.set_bus_mute(_radio_bus_idx, master_volume_linear <= 0.001)
+
+
+func get_buffering_percentage() -> int:
+	if PREBUFFER_THRESHOLD <= 0:
+		return 100
+	return clampi(int((float(_audio_ring_buffer.size()) / float(PREBUFFER_THRESHOLD)) * 100.0), 0, 100)
 
 
 # ==============================================================================
-# AUDIO BUS, SPECTRUM EFFECT & DUAL-BUFFER SWAP ENGINE
+# 4. URL PARSER & SOCKET CONNECTION ENGINE
 # ==============================================================================
 
-func _setup_audio_bus_and_players() -> void:
-	_radio_bus_idx = AudioServer.get_bus_index(RADIO_BUS_NAME)
-	if _radio_bus_idx == -1:
-		_radio_bus_idx = AudioServer.bus_count
-		AudioServer.add_bus(_radio_bus_idx)
-		AudioServer.set_bus_name(_radio_bus_idx, RADIO_BUS_NAME)
-		AudioServer.set_bus_send(_radio_bus_idx, "Master")
+func _parse_url(url: String) -> Dictionary:
+	var work := url.strip_edges()
+	var is_https := false
+	var default_port := 80
 	
-	# Ensure an AudioEffectSpectrumAnalyzer is bound to our dedicated radio bus
-	var found_analyzer := false
-	for i in range(AudioServer.get_bus_effect_count(_radio_bus_idx)):
-		var eff := AudioServer.get_bus_effect(_radio_bus_idx, i)
-		if eff is AudioEffectSpectrumAnalyzer:
-			_spectrum_instance = AudioServer.get_bus_effect_instance(_radio_bus_idx, i) as AudioEffectSpectrumAnalyzerInstance
-			found_analyzer = true
-			break
+	if work.begins_with("https://"):
+		is_https = true
+		default_port = 443
+		work = work.substr(8)
+	elif work.begins_with("http://"):
+		is_https = false
+		default_port = 80
+		work = work.substr(7)
 	
-	if not found_analyzer:
-		var analyzer := AudioEffectSpectrumAnalyzer.new()
-		analyzer.buffer_length = 0.2
-		analyzer.fft_size = AudioEffectSpectrumAnalyzer.FFT_SIZE_1024
-		AudioServer.add_bus_effect(_radio_bus_idx, analyzer)
-		var eff_idx: int = AudioServer.get_bus_effect_count(_radio_bus_idx) - 1
-		_spectrum_instance = AudioServer.get_bus_effect_instance(_radio_bus_idx, eff_idx) as AudioEffectSpectrumAnalyzerInstance
+	var slash_pos := work.find("/")
+	var host_port := work
+	var path := "/"
+	if slash_pos != -1:
+		host_port = work.substr(0, slash_pos)
+		path = work.substr(slash_pos)
 	
-	_player_a = AudioStreamPlayer.new()
-	_player_a.name = "RadioDeckA"
-	_player_a.bus = RADIO_BUS_NAME
-	_player_a.finished.connect(_on_active_deck_finished.bind(_player_a))
-	add_child(_player_a)
-	
-	_player_b = AudioStreamPlayer.new()
-	_player_b.name = "RadioDeckB"
-	_player_b.bus = RADIO_BUS_NAME
-	_player_b.finished.connect(_on_active_deck_finished.bind(_player_b))
-	add_child(_player_b)
-	
-	_active_player = _player_a
-	_standby_player = _player_b
-	_apply_volume_to_bus()
-
-
-func _apply_volume_to_bus() -> void:
-	if _radio_bus_idx == -1:
-		return
-	var is_muted: bool = (not is_powered_on) or (master_volume <= 0.001)
-	AudioServer.set_bus_mute(_radio_bus_idx, is_muted)
-	if not is_muted:
-		var db_val: float = linear_to_db(master_volume)
-		AudioServer.set_bus_volume_db(_radio_bus_idx, db_val)
-
-
-func _service_dual_buffer_playback() -> void:
-	_mutex.lock()
-	var net_status := _network_status_shared
-	var chunk_count := _ready_mp3_chunks.size()
-	var buffered_bytes := _queued_byte_estimate
-	_mutex.unlock()
-	
-	if net_status != _status_cached:
-		_status_cached = net_status
-		stream_status_changed.emit(_status_cached)
-	
-	if not is_powered_on:
-		return
-	
-	# Wait for 1.5 - 2.5+ seconds of prebuffered audio before starting initial playback
-	if _is_prebuffering:
-		if buffered_bytes >= PREBUFFER_THRESHOLD_BYTES or chunk_count >= 2:
-			var first_stream := _pop_next_mp3_chunk()
-			if first_stream != null:
-				_is_prebuffering = false
-				_active_player.stream = first_stream
-				_active_player.play()
-		return
-	
-	# Seamless Dual-Buffer Handoff:
-	# If the active deck is within 45 milliseconds of finishing its current MP3 chunk,
-	# or if it stopped unexpectedly, immediately swap to the standby deck with the next chunk.
-	if _active_player.playing and _active_player.stream != null:
-		var stream_len: float = _active_player.stream.get_length()
-		var playback_pos: float = _active_player.get_playback_position()
-		if stream_len > 0.15 and (stream_len - playback_pos) <= 0.040:
-			var next_chunk := _pop_next_mp3_chunk()
-			if next_chunk != null:
-				_standby_player.stream = next_chunk
-				_standby_player.play()
-				_active_player.stop()
-				var prev := _active_player
-				_active_player = _standby_player
-				_standby_player = prev
-	elif not _active_player.playing:
-		var recovery_chunk := _pop_next_mp3_chunk()
-		if recovery_chunk != null:
-			_active_player.stream = recovery_chunk
-			_active_player.play()
-		else:
-			_is_prebuffering = true
-
-
-func _on_active_deck_finished(deck: AudioStreamPlayer) -> void:
-	if not is_powered_on or deck != _active_player:
-		return
-	var next_chunk := _pop_next_mp3_chunk()
-	if next_chunk != null:
-		_standby_player.stream = next_chunk
-		_standby_player.play()
-		var prev := _active_player
-		_active_player = _standby_player
-		_standby_player = prev
-	else:
-		_is_prebuffering = true
-
-
-func _pop_next_mp3_chunk() -> AudioStreamMP3:
-	var stream_out: AudioStreamMP3 = null
-	_mutex.lock()
-	if not _ready_mp3_chunks.is_empty():
-		stream_out = _ready_mp3_chunks.pop_front()
-		if stream_out != null:
-			_queued_byte_estimate = maxi(0, _queued_byte_estimate - stream_out.data.size())
-	_mutex.unlock()
-	return stream_out
-
-
-# ==============================================================================
-# MULTI-THREADED HTTP STREAMING ENGINE & MPEG FRAME BOUNDARY SPLICER
-# ==============================================================================
-
-func _network_thread_main() -> void:
-	var http := HTTPClient.new()
-	var accumulation_buffer := PackedByteArray()
-	var active_url: String = ""
-	
-	while true:
-		_mutex.lock()
-		var should_exit := _thread_should_exit
-		var powered := _power_state_shared
-		var switch_req := _station_switch_requested
-		var target_idx := _requested_station_idx
-		_mutex.unlock()
-		
-		if should_exit:
-			http.close()
-			break
-		
-		if not powered:
-			http.close()
-			accumulation_buffer.clear()
-			_semaphore.wait()
-			continue
-		
-		if switch_req:
-			http.close()
-			accumulation_buffer.clear()
-			_mutex.lock()
-			_station_switch_requested = false
-			active_url = STATIONS[target_idx]["url"]
-			_network_status_shared = "CONNECTING // " + STATIONS[target_idx]["freq"]
-			_mutex.unlock()
-		
-		if active_url.is_empty():
-			OS.delay_msec(50)
-			continue
-		
-		# Connect & Stream Loop with Automatic Redirect Following & Silent Retry
-		var current_url_to_try: String = active_url
-		var redirects_followed: int = 0
-		var stream_ok: bool = false
-		
-		while redirects_followed < 4:
-			var parsed := _parse_stream_url(current_url_to_try)
-			http.close()
-			
-			var tls_opts: TLSOptions = TLSOptions.client() if parsed["use_tls"] else null
-			var err := http.connect_to_host(parsed["host"], parsed["port"], tls_opts)
-			if err != OK:
-				break
-			
-			# Poll Connection Phase
-			var connect_start_ms: int = Time.get_ticks_msec()
-			var connected := false
-			while Time.get_ticks_msec() - connect_start_ms < 7500:
-				if _check_thread_interrupt():
-					break
-				http.poll()
-				var st := http.get_status()
-				if st == HTTPClient.STATUS_CONNECTED:
-					connected = true
-					break
-				elif st == HTTPClient.STATUS_CANT_CONNECT or st == HTTPClient.STATUS_CANT_RESOLVE or st == HTTPClient.STATUS_TLS_HANDSHAKE_ERROR or st == HTTPClient.STATUS_CONNECTION_ERROR:
-					break
-				OS.delay_msec(15)
-			
-			if not connected or _check_thread_interrupt():
-				break
-			
-			var headers := PackedStringArray([
-				"User-Agent: MountAkinaTougeRadio/4.3 (GodotEngine)",
-				"Accept: */*",
-				"Icy-MetaData: 0",
-				"Connection: keep-alive"
-			])
-			err = http.request(HTTPClient.METHOD_GET, parsed["path"], headers)
-			if err != OK:
-				break
-			
-			# Wait for HTTP Response Headers
-			var req_start_ms: int = Time.get_ticks_msec()
-			var got_headers := false
-			while Time.get_ticks_msec() - req_start_ms < 7500:
-				if _check_thread_interrupt():
-					break
-				http.poll()
-				var st := http.get_status()
-				if st == HTTPClient.STATUS_BODY or http.has_response():
-					got_headers = true
-					break
-				elif st == HTTPClient.STATUS_CONNECTION_ERROR or st == HTTPClient.STATUS_DISCONNECTED:
-					break
-				OS.delay_msec(15)
-			
-			if not got_headers or _check_thread_interrupt():
-				break
-			
-			var response_code: int = http.get_response_code()
-			if response_code in [301, 302, 303, 307, 308]:
-				var resp_headers: Dictionary = http.get_response_headers_as_dictionary()
-				var loc: String = ""
-				for k in resp_headers.keys():
-					if String(k).to_lower() == "location":
-						loc = String(resp_headers[k])
-						break
-				if not loc.is_empty():
-					current_url_to_try = loc
-					redirects_followed += 1
-					continue
-				break
-			
-			if response_code != 200:
-				break
-			
-			# Live Audio Body Streaming Phase
-			stream_ok = true
-			_mutex.lock()
-			_network_status_shared = "CONNECTED // LIVE"
-			_mutex.unlock()
-			
-			var last_byte_ms: int = Time.get_ticks_msec()
-			while not _check_thread_interrupt():
-				http.poll()
-				var st := http.get_status()
-				if st != HTTPClient.STATUS_BODY:
-					break
-				
-				# Throttle socket reads if the main thread already has 12 chunks buffered
-				var queue_full := false
-				_mutex.lock()
-				queue_full = (_ready_mp3_chunks.size() >= MAX_QUEUED_CHUNKS)
-				_mutex.unlock()
-				
-				if queue_full:
-					last_byte_ms = Time.get_ticks_msec()
-					OS.delay_msec(40)
-					continue
-				
-				var chunk: PackedByteArray = http.read_response_body_chunk()
-				if chunk.size() > 0:
-					last_byte_ms = Time.get_ticks_msec()
-					accumulation_buffer.append_array(chunk)
-					
-					if accumulation_buffer.size() >= CHUNK_TARGET_BYTES:
-						_extract_and_push_mpeg_chunk(accumulation_buffer)
-				else:
-					if Time.get_ticks_msec() - last_byte_ms > 9000:
-						# Stream stalled for >9s; trigger silent background reconnect
-						break
-					OS.delay_msec(12)
-			
-			break
-		
-		# If interrupted by user station switch or mute, loop immediately
-		if _check_thread_interrupt():
-			continue
-		
-		# Silent Auto-Retry Backoff on Network Drop
-		_mutex.lock()
-		if not stream_ok:
-			_network_status_shared = "RECONNECTING // RETRY"
-		_mutex.unlock()
-		
-		var retry_wait_ms: int = 0
-		while retry_wait_ms < 1600 and not _check_thread_interrupt():
-			OS.delay_msec(100)
-			retry_wait_ms += 100
-
-
-func _check_thread_interrupt() -> bool:
-	_mutex.lock()
-	var interrupted: bool = _thread_should_exit or (not _power_state_shared) or _station_switch_requested
-	_mutex.unlock()
-	return interrupted
-
-
-func _extract_and_push_mpeg_chunk(buffer: PackedByteArray) -> void:
-	# Align slice to valid 11-bit MPEG frame sync words (0xFF followed by 0xE0..0xFE)
-	# so AudioStreamMP3 receives clean frame boundaries without click artifacts.
-	var first_sync: int = _find_mpeg_sync_offset(buffer, 0)
-	if first_sync > 0:
-		var trimmed := buffer.slice(first_sync)
-		buffer.clear()
-		buffer.append_array(trimmed)
-	
-	if buffer.size() < CHUNK_TARGET_BYTES:
-		return
-	
-	var end_sync: int = _find_mpeg_sync_offset_reverse(buffer, buffer.size() - 4, CHUNK_TARGET_BYTES - 4096)
-	if end_sync <= 0:
-		end_sync = buffer.size()
-	
-	var mp3_bytes: PackedByteArray = buffer.slice(0, end_sync)
-	var remainder: PackedByteArray = buffer.slice(end_sync)
-	buffer.clear()
-	buffer.append_array(remainder)
-	
-	var mp3_stream := AudioStreamMP3.new()
-	mp3_stream.data = mp3_bytes
-	
-	_mutex.lock()
-	if not _station_switch_requested and _power_state_shared:
-		_ready_mp3_chunks.append(mp3_stream)
-		_queued_byte_estimate += mp3_bytes.size()
-	_mutex.unlock()
-
-
-func _find_mpeg_sync_offset(data: PackedByteArray, start_idx: int) -> int:
-	var limit: int = data.size() - 2
-	for i in range(maxi(0, start_idx), limit):
-		if data[i] == 0xFF and (data[i + 1] & 0xE0) == 0xE0 and (data[i + 1] & 0x18) != 0x08 and (data[i + 1] & 0x06) != 0x00:
-			return i
-	return 0
-
-
-func _find_mpeg_sync_offset_reverse(data: PackedByteArray, from_idx: int, min_idx: int) -> int:
-	var lower: int = maxi(0, min_idx)
-	var i: int = mini(from_idx, data.size() - 2)
-	while i >= lower:
-		if data[i] == 0xFF and (data[i + 1] & 0xE0) == 0xE0 and (data[i + 1] & 0x18) != 0x08 and (data[i + 1] & 0x06) != 0x00:
-			return i
-		i -= 1
-	return -1
-
-
-func _parse_stream_url(raw_url: String) -> Dictionary:
-	var use_tls: bool = raw_url.begins_with("https://")
-	var stripped: String = raw_url.replace("https://", "").replace("http://", "")
-	
-	var slash_pos: int = stripped.find("/")
-	var host_port: String = stripped if slash_pos == -1 else stripped.substr(0, slash_pos)
-	var path: String = "/" if slash_pos == -1 else stripped.substr(slash_pos)
-	
-	var host: String = host_port
-	var port: int = 443 if use_tls else 80
-	
-	var colon_pos: int = host_port.find(":")
+	var host := host_port
+	var port := default_port
+	var colon_pos := host_port.find(":")
 	if colon_pos != -1:
 		host = host_port.substr(0, colon_pos)
-		port = host_port.substr(colon_pos + 1).to_int()
+		var port_str := host_port.substr(colon_pos + 1)
+		if port_str.is_valid_int():
+			port = port_str.to_int()
 	
 	return {
+		"https": is_https,
 		"host": host,
 		"port": port,
-		"path": path,
-		"use_tls": use_tls
+		"path": path
 	}
 
 
+func _connect_to_station(index: int, reset_redirects: bool = true) -> void:
+	if reset_redirects:
+		_redirect_count = 0
+	
+	var station_data: Dictionary = stations[index]
+	icy_name = station_data.get("name", "JDM STREAM")
+	icy_genre = station_data.get("genre", "LIVE")
+	icy_bitrate = 128
+	icy_metaint = 0
+	current_track_title = "TUNING: " + icy_name.to_upper() + "..."
+	
+	station_changed.emit(index, icy_name)
+	track_title_updated.emit(current_track_title)
+	
+	_connect_to_raw_url(station_data["url"])
+
+
+func _connect_to_raw_url(url: String) -> void:
+	_close_sockets()
+	_stop_players()
+	
+	_header_buffer.clear()
+	_audio_ring_buffer.clear()
+	_meta_buffer.clear()
+	_demux_state = DemuxState.AUDIO_DATA
+	_bytes_until_meta = 0
+	_meta_bytes_remaining = 0
+	_state_timer = 0.0
+	_data_watchdog = 0.0
+	
+	var parsed := _parse_url(url)
+	_use_tls = parsed["https"]
+	_parsed_host = parsed["host"]
+	_parsed_port = parsed["port"]
+	_parsed_path = parsed["path"]
+	
+	_tcp = StreamPeerTCP.new()
+	
+	# Resolve hostname if needed, or connect directly if IPv4/IPv6 literal
+	var target_ip := _parsed_host
+	if not _parsed_host.is_valid_ip_address():
+		target_ip = IP.resolve_hostname(_parsed_host, IP.TYPE_ANY)
+	
+	if target_ip.is_empty() or not target_ip.is_valid_ip_address():
+		_trigger_reconnect("DNS RESOLUTION FAILED")
+		return
+	
+	var err := _tcp.connect_to_host(target_ip, _parsed_port)
+	if err != OK:
+		_trigger_reconnect("TCP CONNECT ERR: " + str(err))
+		return
+	
+	_tcp.set_no_delay(true)
+	_set_state(StreamState.CONNECTING)
+
+
+func _close_sockets() -> void:
+	if _tls != null:
+		_tls.disconnect_from_stream()
+		_tls = null
+	if _tcp != null:
+		_tcp.disconnect_from_host()
+		_tcp = null
+	_active_peer = null
+
+
+func _stop_players() -> void:
+	if _player_a:
+		_player_a.stop()
+		_player_a.stream = null
+	if _player_b:
+		_player_b.stop()
+		_player_b.stream = null
+	_active_slice_duration = 0.0
+	_active_slice_elapsed = 0.0
+	_is_crossfading = false
+	_crossfade_elapsed = 0.0
+
+
+func _set_state(new_state: StreamState) -> void:
+	state = new_state
+	_state_timer = 0.0
+	stream_state_changed.emit(StreamState.keys()[new_state])
+
+
 # ==============================================================================
-# KENWOOD VFD FLUORESCENT HUD & 12-BAND SPECTRUM ANALYZER
+# 5. NON-BLOCKING MAIN LOOP: NETWORK POLLING, DEMUXING & AUDIO FEEDING
 # ==============================================================================
 
-func _update_spectrum_analyzer(delta: float) -> void:
-	var is_active_audio: bool = is_powered_on and (_active_player != null and _active_player.playing) and master_volume > 0.001
+func _process(delta: float) -> void:
+	if not is_powered_on or state == StreamState.OFF:
+		if _vfd_control and is_hud_visible:
+			_vfd_control.update_visuals(delta)
+		return
 	
-	for i in range(SPECTRUM_BANDS):
-		var target_energy: float = 0.0
-		if is_active_audio and _spectrum_instance != null:
-			var range_hz: Vector2 = FREQ_RANGES[i]
-			var mag: Vector2 = _spectrum_instance.get_magnitude_for_frequency_range(range_hz.x, range_hz.y, AudioEffectSpectrumAnalyzerInstance.MAGNITUDE_MAX)
-			var linear_mag: float = (mag.x + mag.y) * 0.5
-			# Convert linear FFT magnitude to normalized VFD bar height (60 dB dynamic range)
-			target_energy = clampf((linear_to_db(linear_mag + 0.00001) + 60.0) / 56.0, 0.0, 1.0)
-			# High-frequency visual compensation curve
-			target_energy = clampf(target_energy * lerpf(1.0, 1.45, float(i) / float(SPECTRUM_BANDS - 1)), 0.0, 1.0)
-		
-		if target_energy > _band_levels[i]:
-			_band_levels[i] = move_toward(_band_levels[i], target_energy, delta * 9.5)
+	_state_timer += delta
+	
+	match state:
+		StreamState.CONNECTING:
+			_poll_tcp_connecting()
+		StreamState.TLS_HANDSHAKE:
+			_poll_tls_handshake()
+		StreamState.SENDING_REQUEST:
+			_send_icy_http_request()
+		StreamState.READING_HEADERS:
+			_poll_http_headers()
+		StreamState.BUFFERING:
+			_poll_audio_stream(delta)
+			if _audio_ring_buffer.size() >= PREBUFFER_THRESHOLD:
+				if _start_next_audio_slice(false):
+					_set_state(StreamState.PLAYING)
+		StreamState.PLAYING:
+			_poll_audio_stream(delta)
+			_update_audio_playback(delta)
+		StreamState.RECONNECTING:
+			_reconnect_tick(delta)
+		StreamState.ERROR:
+			pass
+	
+	if _vfd_control and is_hud_visible:
+		_vfd_control.update_visuals(delta)
+
+
+func _poll_tcp_connecting() -> void:
+	_tcp.poll()
+	var status := _tcp.get_status()
+	
+	if status == StreamPeerTCP.STATUS_CONNECTED:
+		if _use_tls:
+			_tls = StreamPeerTLS.new()
+			var tls_opts := TLSOptions.client_unsafe()
+			var err := _tls.connect_to_stream(_tcp, _parsed_host, tls_opts)
+			if err != OK:
+				_trigger_reconnect("TLS INIT FAILED")
+				return
+			_set_state(StreamState.TLS_HANDSHAKE)
 		else:
-			_band_levels[i] = move_toward(_band_levels[i], target_energy, delta * 2.8)
-		
-		if _band_levels[i] >= _band_peaks[i]:
-			_band_peaks[i] = _band_levels[i]
-			_band_peak_hold_timers[i] = 0.38
-		else:
-			if _band_peak_hold_timers[i] > 0.0:
-				_band_peak_hold_timers[i] -= delta
-			else:
-				_band_peaks[i] = move_toward(_band_peaks[i], _band_levels[i], delta * 1.15)
+			_active_peer = _tcp
+			_set_state(StreamState.SENDING_REQUEST)
+	elif status == StreamPeerTCP.STATUS_ERROR or status == StreamPeerTCP.STATUS_NONE:
+		_trigger_reconnect("TCP SOCKET REFUSED")
+	elif _state_timer > CONNECTION_TIMEOUT:
+		_trigger_reconnect("TCP TIMEOUT")
 
 
-func _build_kenwood_vfd_hud() -> void:
-	_hud_layer = CanvasLayer.new()
-	_hud_layer.name = "KenwoodVFDRadioHUD"
-	_hud_layer.layer = 85
-	add_child(_hud_layer)
+func _poll_tls_handshake() -> void:
+	_tls.poll()
+	var status := _tls.get_status()
 	
-	var anchor_root := Control.new()
-	anchor_root.name = "TopRightAnchor"
-	anchor_root.set_anchors_preset(Control.PRESET_FULL_RECT)
-	anchor_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_hud_layer.add_child(anchor_root)
-	
-	_vfd_canvas = Control.new()
-	_vfd_canvas.name = "VFDDisplayUnit"
-	_vfd_canvas.anchor_left = 1.0
-	_vfd_canvas.anchor_right = 1.0
-	_vfd_canvas.anchor_top = 0.0
-	_vfd_canvas.anchor_bottom = 0.0
-	_vfd_canvas.offset_left = -416.0
-	_vfd_canvas.offset_right = -18.0
-	_vfd_canvas.offset_top = 18.0
-	_vfd_canvas.offset_bottom = 176.0
-	_vfd_canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_vfd_canvas.draw.connect(_draw_kenwood_vfd_unit)
-	anchor_root.add_child(_vfd_canvas)
+	if status == StreamPeerTLS.STATUS_CONNECTED:
+		_active_peer = _tls
+		_set_state(StreamState.SENDING_REQUEST)
+	elif status == StreamPeerTLS.STATUS_ERROR or status == StreamPeerTLS.STATUS_ERROR_HOSTNAME_MISMATCH:
+		_trigger_reconnect("TLS HANDSHAKE ERROR")
+	elif _state_timer > CONNECTION_TIMEOUT:
+		_trigger_reconnect("TLS TIMEOUT")
 
 
-func _draw_kenwood_vfd_unit() -> void:
-	var font: Font = ThemeDB.fallback_font
-	var rect := Rect2(Vector2.ZERO, _vfd_canvas.size)
+func _send_icy_http_request() -> void:
+	var host_header := _parsed_host
+	if (_use_tls and _parsed_port != 443) or (not _use_tls and _parsed_port != 80):
+		host_header += ":" + str(_parsed_port)
 	
-	# 1. Outer Brushed Dark Faceplate & Fluorescent Glass Bezel
-	_vfd_canvas.draw_rect(rect, Color(0.03, 0.04, 0.06, 0.92), true)
-	_vfd_canvas.draw_rect(Rect2(3, 3, rect.size.x - 6, rect.size.y - 6), Color(0.015, 0.025, 0.035, 0.96), true)
+	var req_lines := PackedStringArray([
+		"GET " + _parsed_path + " HTTP/1.0",
+		"Host: " + host_header,
+		"User-Agent: MountAkinaJDM/4.3 (WinampMPEG)",
+		"Accept: */*",
+		"Icy-MetaData: 1",
+		"Connection: close",
+		"",
+		""
+	])
+	var raw_request := "\r\n".join(req_lines).to_utf8_buffer()
+	var err := _active_peer.put_data(raw_request)
+	if err != OK:
+		_trigger_reconnect("REQUEST WRITE FAILED")
+		return
 	
-	var vfd_cyan := Color(0.18, 0.95, 0.88, 1.0)
-	var vfd_cyan_dim := Color(0.10, 0.42, 0.40, 0.32)
-	var vfd_amber := Color(1.0, 0.68, 0.18, 1.0)
-	var vfd_red := Color(1.0, 0.24, 0.30, 1.0)
+	_set_state(StreamState.READING_HEADERS)
+
+
+func _poll_http_headers() -> void:
+	if not _poll_active_socket():
+		return
 	
-	var border_col: Color = vfd_cyan if is_powered_on else Color(0.25, 0.30, 0.35, 0.5)
-	_vfd_canvas.draw_rect(rect, Color(border_col.r, border_col.g, border_col.b, 0.65), false, 1.5)
-	
-	# 2. Top Brand & Status Bar
-	_vfd_canvas.draw_string(font, Vector2(12, 20), "KENWOOD // KDC-9000DSP VFD", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.65, 0.78, 0.85, 0.85))
-	
-	var status_col: Color = vfd_cyan if ("LIVE" in _status_cached and is_powered_on) else vfd_amber
-	if not is_powered_on:
-		status_col = vfd_red
-	_vfd_canvas.draw_string(font, Vector2(rect.size.x - 12, 20), _status_cached, HORIZONTAL_ALIGNMENT_RIGHT, -1, 11, status_col)
-	
-	# Subtle VFD scanline divider
-	_vfd_canvas.draw_line(Vector2(10, 26), Vector2(rect.size.x - 10, 26), Color(0.18, 0.95, 0.88, 0.22), 1.0)
-	
-	# 3. Left Telemetry Column: Station Frequency, Name, Volume & Controls
-	var st_data: Dictionary = STATIONS[current_station_index]
-	var freq_text: String = st_data["freq"] if is_powered_on else "---.- FM"
-	var name_text: String = st_data["name"] if is_powered_on else "POWER OFF // MUTED"
-	var sub_text: String = st_data["sub"] if is_powered_on else "PRESS [M] TO POWER ON"
-	
-	_vfd_canvas.draw_string(font, Vector2(12, 54), freq_text, HORIZONTAL_ALIGNMENT_LEFT, -1, 24, vfd_cyan if is_powered_on else vfd_cyan_dim)
-	
-	# Stereo / Digital Lock Badge
-	var st_badge_col: Color = vfd_amber if is_powered_on else vfd_cyan_dim
-	_vfd_canvas.draw_string(font, Vector2(128, 44), "[ST]", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, st_badge_col)
-	_vfd_canvas.draw_string(font, Vector2(128, 55), "DSP", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, vfd_cyan if is_powered_on else vfd_cyan_dim)
-	
-	_vfd_canvas.draw_string(font, Vector2(12, 76), name_text, HORIZONTAL_ALIGNMENT_LEFT, 205, 13, Color(0.92, 0.98, 1.0, 0.95) if is_powered_on else vfd_cyan_dim)
-	_vfd_canvas.draw_string(font, Vector2(12, 92), sub_text, HORIZONTAL_ALIGNMENT_LEFT, 205, 10, Color(0.55, 0.78, 0.82, 0.80))
-	
-	# Live Volume Bar & Readout
-	var vol_pct: int = int(round(master_volume * 100.0)) if is_powered_on else 0
-	_vfd_canvas.draw_string(font, Vector2(12, 116), "VOL %02d%%" % vol_pct, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, vfd_amber if is_powered_on else vfd_cyan_dim)
-	
-	var vol_segments: int = 14
-	var active_vol_segs: int = int(round(master_volume * float(vol_segments))) if is_powered_on else 0
-	for s in range(vol_segments):
-		var seg_rect := Rect2(76.0 + s * 9.0, 106.0, 6.5, 10.0)
-		if s < active_vol_segs:
-			var seg_c: Color = vfd_cyan if s < 11 else vfd_amber
-			_vfd_canvas.draw_rect(seg_rect, seg_c, true)
-		else:
-			_vfd_canvas.draw_rect(seg_rect, vfd_cyan_dim, true)
-	
-	# 4. Right Column: 12-Band VFD Fluorescent Spectrum Analyzer
-	var spec_origin := Vector2(222.0, 36.0)
-	var spec_size := Vector2(164.0, 84.0)
-	var num_segments_y: int = 12
-	var band_step_x: float = spec_size.x / float(SPECTRUM_BANDS)
-	var bar_w: float = band_step_x - 3.0
-	var seg_h: float = (spec_size.y / float(num_segments_y)) - 1.5
-	
-	for b in range(SPECTRUM_BANDS):
-		var bx: float = spec_origin.x + float(b) * band_step_x
-		var lit_count: int = int(round(_band_levels[b] * float(num_segments_y)))
-		var peak_seg: int = clampi(int(round(_band_peaks[b] * float(num_segments_y))) - 1, -1, num_segments_y - 1)
-		
-		for s in range(num_segments_y):
-			var sy: float = spec_origin.y + spec_size.y - float(s + 1) * (seg_h + 1.5)
-			var cell_rect := Rect2(bx, sy, bar_w, seg_h)
+	var avail := _active_peer.get_available_bytes()
+	if avail > 0:
+		var res := _active_peer.get_partial_data(mini(avail, 4096))
+		if res[0] == OK:
+			var chunk: PackedByteArray = res[1]
+			_header_buffer.append_array(chunk)
 			
-			if s < lit_count:
-				var seg_color: Color = vfd_cyan
-				if s >= 10:
-					seg_color = vfd_red
-				elif s >= 7:
-					seg_color = vfd_amber
-				_vfd_canvas.draw_rect(cell_rect, seg_color, true)
-			elif s == peak_seg and is_powered_on and peak_seg > 0:
-				_vfd_canvas.draw_rect(cell_rect, Color(1.0, 0.92, 0.55, 0.95), true)
+			var split_idx := _find_header_terminator(_header_buffer)
+			if split_idx != -1:
+				var header_bytes := _header_buffer.slice(0, split_idx)
+				var leftover_audio := _header_buffer.slice(split_idx + 4)
+				_header_buffer.clear()
+				
+				if _parse_icy_headers(header_bytes.get_string_from_ascii()):
+					if icy_metaint > 0:
+						_bytes_until_meta = icy_metaint
+					_demux_state = DemuxState.AUDIO_DATA
+					if leftover_audio.size() > 0:
+						_demux_incoming_bytes(leftover_audio)
+					_set_state(StreamState.BUFFERING)
+					current_track_title = icy_name + " - LIVE"
+					track_title_updated.emit(current_track_title)
+				return
+	
+	if _state_timer > CONNECTION_TIMEOUT:
+		_trigger_reconnect("HEADER READ TIMEOUT")
+
+
+func _find_header_terminator(buf: PackedByteArray) -> int:
+	var limit := buf.size() - 3
+	for i in range(limit):
+		if buf[i] == 13 and buf[i + 1] == 10 and buf[i + 2] == 13 and buf[i + 3] == 10:
+			return i
+	return -1
+
+
+func _parse_icy_headers(raw_headers: String) -> bool:
+	var lines := raw_headers.split("\r\n", false)
+	if lines.is_empty():
+		_trigger_reconnect("EMPTY HTTP RESPONSE")
+		return false
+	
+	var status_line := lines[0].to_upper()
+	if not ("200" in status_line):
+		# Handle HTTP 301 / 302 / 307 Redirects gracefully
+		if "301" in status_line or "302" in status_line or "307" in status_line or "308" in status_line:
+			for i in range(1, lines.size()):
+				var l := lines[i]
+				if l.to_lower().begins_with("location:"):
+					var redirect_url := l.substr(9).strip_edges()
+					if _redirect_count < MAX_REDIRECTS:
+						_redirect_count += 1
+						_connect_to_raw_url(redirect_url)
+						return false
+		_trigger_reconnect("HTTP STATUS: " + status_line)
+		return false
+	
+	for i in range(1, lines.size()):
+		var line := lines[i]
+		var colon := line.find(":")
+		if colon == -1:
+			continue
+		var key := line.substr(0, colon).strip_edges().to_lower()
+		var val := line.substr(colon + 1).strip_edges()
+		
+		match key:
+			"icy-name":
+				if not val.is_empty():
+					icy_name = val
+			"icy-genre":
+				if not val.is_empty():
+					icy_genre = val
+			"icy-br":
+				if val.is_valid_int():
+					icy_bitrate = maxi(val.to_int(), 32)
+			"icy-metaint":
+				if val.is_valid_int():
+					icy_metaint = maxi(val.to_int(), 0)
+	
+	return true
+
+
+# ==============================================================================
+# 6. STREAMING DEMUXER: SEPARATING MPEG AUDIO FRAMES FROM ICY METADATA
+# ==============================================================================
+
+func _poll_active_socket() -> bool:
+	if _use_tls and _tls != null:
+		_tls.poll()
+		var st := _tls.get_status()
+		if st != StreamPeerTLS.STATUS_CONNECTED:
+			_trigger_reconnect("TLS STREAM DROPPED")
+			return false
+	elif _tcp != null:
+		_tcp.poll()
+		var st := _tcp.get_status()
+		if st != StreamPeerTCP.STATUS_CONNECTED:
+			_trigger_reconnect("TCP STREAM DROPPED")
+			return false
+	else:
+		return false
+	return true
+
+
+func _poll_audio_stream(delta: float) -> void:
+	if not _poll_active_socket():
+		return
+	
+	var avail := _active_peer.get_available_bytes()
+	if avail > 0:
+		_data_watchdog = 0.0
+		var to_read := mini(avail, SOCKET_READ_CAP)
+		var res := _active_peer.get_partial_data(to_read)
+		if res[0] == OK:
+			var raw_bytes: PackedByteArray = res[1]
+			if raw_bytes.size() > 0:
+				_demux_incoming_bytes(raw_bytes)
+	else:
+		_data_watchdog += delta
+		if _data_watchdog > CONNECTION_TIMEOUT:
+			_trigger_reconnect("STREAM DATA STALLED")
+
+
+func _demux_incoming_bytes(chunk: PackedByteArray) -> void:
+	if icy_metaint <= 0:
+		_append_to_audio_ring_buffer(chunk)
+		return
+	
+	var cursor: int = 0
+	var total: int = chunk.size()
+	
+	while cursor < total:
+		match _demux_state:
+			DemuxState.AUDIO_DATA:
+				var take := mini(total - cursor, _bytes_until_meta)
+				if take > 0:
+					_append_to_audio_ring_buffer(chunk.slice(cursor, cursor + take))
+					cursor += take
+					_bytes_until_meta -= take
+				if _bytes_until_meta == 0:
+					_demux_state = DemuxState.META_LENGTH
+			
+			DemuxState.META_LENGTH:
+				var length_multiplier: int = chunk[cursor]
+				cursor += 1
+				_meta_bytes_remaining = length_multiplier * 16
+				_meta_buffer.clear()
+				if _meta_bytes_remaining > 0:
+					_demux_state = DemuxState.META_STRING
+				else:
+					_bytes_until_meta = icy_metaint
+					_demux_state = DemuxState.AUDIO_DATA
+			
+			DemuxState.META_STRING:
+				var take := mini(total - cursor, _meta_bytes_remaining)
+				if take > 0:
+					_meta_buffer.append_array(chunk.slice(cursor, cursor + take))
+					cursor += take
+					_meta_bytes_remaining -= take
+				if _meta_bytes_remaining == 0:
+					_parse_metadata_payload(_meta_buffer)
+					_bytes_until_meta = icy_metaint
+					_demux_state = DemuxState.AUDIO_DATA
+
+
+func _append_to_audio_ring_buffer(bytes: PackedByteArray) -> void:
+	_audio_ring_buffer.append_array(bytes)
+	if _audio_ring_buffer.size() > MAX_AUDIO_BUFFER_SIZE:
+		var excess := _audio_ring_buffer.size() - MAX_AUDIO_BUFFER_SIZE
+		_audio_ring_buffer = _audio_ring_buffer.slice(excess)
+
+
+func _parse_metadata_payload(meta_bytes: PackedByteArray) -> void:
+	var clean_len := meta_bytes.size()
+	while clean_len > 0 and meta_bytes[clean_len - 1] == 0:
+		clean_len -= 1
+	if clean_len <= 0:
+		return
+	
+	var meta_str := meta_bytes.slice(0, clean_len).get_string_from_utf8()
+	var key_idx := meta_str.find("StreamTitle='")
+	if key_idx != -1:
+		var start := key_idx + 13
+		var end := meta_str.find("';", start)
+		if end == -1:
+			end = meta_str.rfind("'")
+		if end > start:
+			var extracted := meta_str.substr(start, end - start).strip_edges()
+			if not extracted.is_empty() and extracted != current_track_title:
+				current_track_title = extracted
+				track_title_updated.emit(current_track_title)
+
+
+# ==============================================================================
+# 7. MPEG SYNC-WORD SLICER & DUAL-PLAYER CROSSFADING ENGINE
+# ==============================================================================
+
+func _find_first_mp3_sync(buf: PackedByteArray, start_offset: int = 0) -> int:
+	var limit := buf.size() - 3
+	for i in range(start_offset, limit):
+		if buf[i] == 0xFF and (buf[i + 1] & 0xE0) == 0xE0:
+			var version_bits := (buf[i + 1] >> 3) & 0x03
+			var layer_bits := (buf[i + 1] >> 1) & 0x03
+			var bitrate_idx := (buf[i + 2] >> 4) & 0x0F
+			var sample_idx := (buf[i + 2] >> 2) & 0x03
+			if version_bits != 1 and layer_bits != 0 and bitrate_idx != 0 and bitrate_idx != 15 and sample_idx != 3:
+				return i
+	return -1
+
+
+func _find_last_mp3_sync(buf: PackedByteArray, max_offset: int) -> int:
+	var start := mini(max_offset, buf.size() - 4)
+	for i in range(start, 2048, -1):
+		if buf[i] == 0xFF and (buf[i + 1] & 0xE0) == 0xE0:
+			var version_bits := (buf[i + 1] >> 3) & 0x03
+			var layer_bits := (buf[i + 1] >> 1) & 0x03
+			var bitrate_idx := (buf[i + 2] >> 4) & 0x0F
+			var sample_idx := (buf[i + 2] >> 2) & 0x03
+			if version_bits != 1 and layer_bits != 0 and bitrate_idx != 0 and bitrate_idx != 15 and sample_idx != 3:
+				return i
+	return -1
+
+
+func _start_next_audio_slice(use_crossfade: bool) -> bool:
+	if _audio_ring_buffer.size() < SLICE_BYTE_SIZE:
+		return false
+	
+	var first_sync := _find_first_mp3_sync(_audio_ring_buffer, 0)
+	if first_sync == -1:
+		_audio_ring_buffer.clear()
+		return false
+	
+	if first_sync > 0:
+		_audio_ring_buffer = _audio_ring_buffer.slice(first_sync)
+	
+	if _audio_ring_buffer.size() < SLICE_BYTE_SIZE:
+		return false
+	
+	var cut_point := _find_last_mp3_sync(_audio_ring_buffer, SLICE_BYTE_SIZE)
+	if cut_point <= 0:
+		cut_point = SLICE_BYTE_SIZE
+	
+	var overlap_end := mini(cut_point + 512, _audio_ring_buffer.size())
+	var slice_bytes := _audio_ring_buffer.slice(0, overlap_end)
+	_audio_ring_buffer = _audio_ring_buffer.slice(cut_point)
+	
+	var mp3_stream := AudioStreamMP3.new()
+	mp3_stream.data = slice_bytes
+	var duration := mp3_stream.get_length()
+	
+	if duration <= 0.08:
+		return false
+	
+	if use_crossfade and _active_player.playing:
+		var prev_player := _active_player
+		_active_player = _standby_player
+		_standby_player = prev_player
+		
+		_active_player.stream = mp3_stream
+		_active_player.volume_db = -24.0
+		_active_player.play()
+		
+		_is_crossfading = true
+		_crossfade_elapsed = 0.0
+	else:
+		_active_player.stream = mp3_stream
+		_active_player.volume_db = 0.0
+		_active_player.play()
+		_is_crossfading = false
+	
+	var bitrate_bytes_per_sec := float(maxi(icy_bitrate, 64) * 1000) / 8.0
+	var exact_cut_duration := float(cut_point) / bitrate_bytes_per_sec
+	_active_slice_duration = clampf(duration - CROSSFADE_TIME, exact_cut_duration * 0.85, duration - 0.02)
+	_active_slice_elapsed = 0.0
+	return true
+
+
+func _update_audio_playback(delta: float) -> void:
+	_active_slice_elapsed += delta
+	
+	if _is_crossfading:
+		_crossfade_elapsed += delta
+		var t := clampf(_crossfade_elapsed / CROSSFADE_TIME, 0.0, 1.0)
+		_active_player.volume_db = linear_to_db(maxf(t, 0.001))
+		_standby_player.volume_db = linear_to_db(maxf(1.0 - t, 0.001))
+		if t >= 1.0:
+			_active_player.volume_db = 0.0
+			_standby_player.stop()
+			_is_crossfading = false
+	
+	if _active_slice_elapsed >= _active_slice_duration or not _active_player.playing:
+		if not _start_next_audio_slice(true):
+			_stop_players()
+			_set_state(StreamState.BUFFERING)
+
+
+# ==============================================================================
+# 8. EXPONENTIAL BACKOFF RECONNECTION HANDLER
+# ==============================================================================
+
+func _trigger_reconnect(reason: String) -> void:
+	_close_sockets()
+	_stop_players()
+	
+	var shift_exp := mini(_reconnect_attempts, 3) # 2s, 4s, 8s, 16s cap
+	_reconnect_wait_time = float(2 << shift_exp)
+	_reconnect_attempts += 1
+	_reconnect_accum = 0.0
+	
+	current_track_title = reason + " - RETRY IN " + str(int(_reconnect_wait_time)) + "S"
+	track_title_updated.emit(current_track_title)
+	_set_state(StreamState.RECONNECTING)
+
+
+func _reconnect_tick(delta: float) -> void:
+	_reconnect_accum += delta
+	if _reconnect_accum >= _reconnect_wait_time:
+		_connect_to_station(current_station_idx, true)
+
+
+# ==============================================================================
+# 9. PROCEDURAL 90s KENWOOD 1-DIN VFD (VACUUM FLUORESCENT DISPLAY) HUD
+# ==============================================================================
+
+class KenwoodVFDDisplay extends Control:
+	var radio: JDMRadioAudioSystem
+	
+	# 90s Kenwood / Pioneer VFD Color Palette
+	const COL_CHASSIS_OUTER := Color(0.08, 0.08, 0.10, 0.96)
+	const COL_CHASSIS_BEVEL := Color(0.18, 0.19, 0.22, 1.0)
+	const COL_VFD_GLASS := Color(0.02, 0.05, 0.06, 0.98)
+	const COL_VFD_GRID := Color(0.05, 0.14, 0.16, 0.35)
+	const COL_VFD_CYAN := Color(0.15, 0.98, 0.88, 1.0)
+	const COL_VFD_CYAN_DIM := Color(0.06, 0.32, 0.30, 0.55)
+	const COL_VFD_AMBER := Color(1.0, 0.42, 0.12, 1.0)
+	const COL_VFD_RED_PEAK := Color(1.0, 0.18, 0.28, 1.0)
+	const COL_BTN_BODY := Color(0.13, 0.14, 0.16, 1.0)
+	
+	const NUM_BANDS: int = 16
+	var _band_levels: PackedFloat32Array = PackedFloat32Array()
+	var _band_peaks: PackedFloat32Array = PackedFloat32Array()
+	var _scroll_offset: float = 0.0
+	var _vol_overlay_timer: float = 0.0
+	var _blink_accum: float = 0.0
+	
+	func _init(owner_radio: JDMRadioAudioSystem) -> void:
+		radio = owner_radio
+		_band_levels.resize(NUM_BANDS)
+		_band_peaks.resize(NUM_BANDS)
+		_band_levels.fill(0.0)
+		_band_peaks.fill(0.0)
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+	
+	func trigger_volume_overlay() -> void:
+		_vol_overlay_timer = 2.0
+		queue_redraw()
+	
+	func update_visuals(delta: float) -> void:
+		_blink_accum += delta
+		if _vol_overlay_timer > 0.0:
+			_vol_overlay_timer = maxf(0.0, _vol_overlay_timer - delta)
+		
+		# Scroll marquee text
+		_scroll_offset += delta * 48.0
+		
+		# Sample 16 logarithmic frequency bands from AudioEffectSpectrumAnalyzerInstance
+		var is_active_audio := (radio.is_powered_on and radio.state == JDMRadioAudioSystem.StreamState.PLAYING)
+		var prev_hz: float = 40.0
+		
+		for i in range(NUM_BANDS):
+			var max_hz := 40.0 * pow(350.0, float(i + 1) / float(NUM_BANDS))
+			var target_val: float = 0.0
+			
+			if is_active_audio and radio._spectrum_instance != null:
+				var mag_vec: Vector2 = radio._spectrum_instance.get_magnitude_for_frequency_range(prev_hz, max_hz)
+				var energy := clampf(( linear_to_db(mag_vec.length()) + 58.0 ) / 52.0, 0.0, 1.0)
+				target_val = energy
+			
+			prev_hz = max_hz
+			
+			if target_val > _band_levels[i]:
+				_band_levels[i] = move_toward(_band_levels[i], target_val, delta * 9.5)
 			else:
-				_vfd_canvas.draw_rect(cell_rect, Color(0.08, 0.25, 0.26, 0.24), true)
+				_band_levels[i] = move_toward(_band_levels[i], target_val, delta * 3.2)
+			
+			if _band_levels[i] >= _band_peaks[i]:
+				_band_peaks[i] = _band_levels[i]
+			else:
+				_band_peaks[i] = maxf(0.0, _band_peaks[i] - delta * 0.65)
+		
+		queue_redraw()
 	
-	# Spectrum Frequency Legend
-	_vfd_canvas.draw_string(font, Vector2(spec_origin.x, 131), "60Hz", HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(0.5, 0.75, 0.78, 0.75))
-	_vfd_canvas.draw_string(font, Vector2(spec_origin.x + 64, 131), "1kHz", HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(0.5, 0.75, 0.78, 0.75))
-	_vfd_canvas.draw_string(font, Vector2(spec_origin.x + 132, 131), "16kHz", HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(0.5, 0.75, 0.78, 0.75))
+	func _draw() -> void:
+		var font: Font = ThemeDB.fallback_font
+		var w := size.x
+		var h := size.y
+		
+		# 1. Outer 1-DIN Faceplate & Bevel
+		draw_rect(Rect2(0, 0, w, h), COL_CHASSIS_OUTER, true)
+		draw_rect(Rect2(0, 0, w, h), COL_CHASSIS_BEVEL, false, 2.0)
+		draw_rect(Rect2(4, 4, w - 8, h - 8), Color(0.04, 0.04, 0.05, 1.0), false, 1.5)
+		
+		# 2. Left-side Kenwood Tactile Control Cluster
+		_draw_left_buttons(font)
+		
+		# 3. Recessed VFD Glass Screen Window
+		var screen_rect := Rect2(88, 12, w - 100, h - 34)
+		draw_rect(screen_rect, COL_VFD_GLASS, true)
+		draw_rect(screen_rect, Color(0.01, 0.25, 0.24, 0.6), false, 1.5)
+		
+		# Subtle background VFD filament scanlines
+		var scan_y := screen_rect.position.y + 4.0
+		while scan_y < screen_rect.end.y:
+			draw_line(Vector2(screen_rect.position.x + 2, scan_y), Vector2(screen_rect.end.x - 2, scan_y), COL_VFD_GRID, 1.0)
+			scan_y += 4.0
+		
+		# Bottom Bezel Branding & Key Hints
+		draw_string(font, Vector2(90, h - 7), "KENWOOD  KDC-7000  DSP-SPECTRUM", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.65, 0.70, 0.75, 0.9))
+		draw_string(font, Vector2(w - 200, h - 7), "[M] PWR  [T] CH  [-/=] VOL  [R] RESET", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.48, 0.52, 0.56, 0.85))
+		
+		if not radio.is_powered_on:
+			draw_string(font, screen_rect.position + Vector2(95, 50), "STANDBY // PRESS [M]", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, COL_VFD_CYAN_DIM)
+			return
+		
+		# 4. Top Status Ribbon (Channel Preset, Bitrate, Stereo Indicator, Volume)
+		var ch_str := "CH-%02d [%s]" % [radio.current_station_idx + 1, radio.icy_genre.substr(0, 12).to_upper()]
+		draw_string(font, screen_rect.position + Vector2(8, 16), ch_str, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, COL_VFD_CYAN)
+		
+		var br_str := "%d KBPS" % radio.icy_bitrate
+		draw_string(font, screen_rect.position + Vector2(165, 16), br_str, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, COL_VFD_AMBER)
+		
+		var st_badge_col := COL_VFD_RED_PEAK if radio.state == JDMRadioAudioSystem.StreamState.PLAYING else COL_VFD_CYAN_DIM
+		draw_string(font, screen_rect.position + Vector2(235, 16), "ST.LIVE", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, st_badge_col)
+		
+		var vol_pct := int(round(radio.master_volume_linear * 35.0))
+		draw_string(font, screen_rect.position + Vector2(292, 16), "VOL %02d" % vol_pct, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, COL_VFD_CYAN)
+		
+		# Divider Line
+		draw_line(
+			screen_rect.position + Vector2(6, 21),
+			Vector2(screen_rect.end.x - 6, screen_rect.position.y + 21),
+			COL_VFD_CYAN_DIM,
+			1.0
+		)
+		
+		# 5. Middle VFD Marquee (Track Title or Buffering Progress)
+		var marquee_text := ""
+		if _vol_overlay_timer > 0.0:
+			var bars := int(round(radio.master_volume_linear * 20.0))
+			marquee_text = "VOLUME LEVEL: [" + "#".repeat(bars) + "-".repeat(20 - bars) + "] " + str(int(radio.master_volume_linear * 100.0)) + "%"
+		elif radio.state == JDMRadioAudioSystem.StreamState.BUFFERING:
+			var pct := radio.get_buffering_percentage()
+			marquee_text = "BUFFERING... [%02d%%]  %s" % [pct, radio.icy_name.to_upper()]
+		elif radio.state == JDMRadioAudioSystem.StreamState.CONNECTING or radio.state == JDMRadioAudioSystem.StreamState.TLS_HANDSHAKE or radio.state == JDMRadioAudioSystem.StreamState.READING_HEADERS:
+			marquee_text = "CONNECTING TO: " + radio.icy_name.to_upper() + "..."
+		else:
+			marquee_text = radio.icy_name.to_upper() + "  ::  " + radio.current_track_title.to_upper() + "     ***     "
+		
+		_draw_scrolling_marquee(font, Rect2(screen_rect.position.x + 8, screen_rect.position.y + 24, screen_rect.size.x - 16, 20), marquee_text)
+		
+		# 6. 16-Band Vacuum Fluorescent Spectrum Analyzer
+		var spec_area := Rect2(screen_rect.position.x + 8, screen_rect.position.y + 46, screen_rect.size.x - 16, 38)
+		_draw_spectrum_bars(spec_area)
 	
-	# 5. Bottom Keybind Legend Strip
-	_vfd_canvas.draw_line(Vector2(10, 136), Vector2(rect.size.x - 10, 136), Color(0.18, 0.95, 0.88, 0.18), 1.0)
-	var controls_str: String = "[M] PWR/MUTE   [B / N] PREV/NEXT CH   [PGUP / PGDN] VOL"
-	_vfd_canvas.draw_string(font, Vector2(12, 150), controls_str, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.62, 0.82, 0.88, 0.85))
+	func _draw_left_buttons(font: Font) -> void:
+		# Power Button
+		var pwr_rect := Rect2(12, 12, 66, 24)
+		draw_rect(pwr_rect, COL_BTN_BODY, true)
+		var pwr_led := COL_VFD_RED_PEAK if radio.is_powered_on else Color(0.3, 0.1, 0.1, 1.0)
+		draw_rect(Rect2(16, 16, 6, 6), pwr_led, true)
+		draw_string(font, Vector2(26, 28), "SRC/PWR", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.85, 0.88, 0.9, 1.0))
+		
+		# Channel Up / Down Rocker
+		var ch_rect := Rect2(12, 42, 66, 28)
+		draw_rect(ch_rect, COL_BTN_BODY, true)
+		draw_rect(ch_rect, COL_CHASSIS_BEVEL, false, 1.0)
+		draw_string(font, Vector2(18, 60), "<< TUNE >>", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, COL_VFD_CYAN)
+		
+		# Volume Control Rocker
+		var vol_rect := Rect2(12, 76, 66, 26)
+		draw_rect(vol_rect, COL_BTN_BODY, true)
+		draw_rect(vol_rect, COL_CHASSIS_BEVEL, false, 1.0)
+		draw_string(font, Vector2(20, 93), "- VOL +", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, COL_VFD_AMBER)
+	
+	func _draw_scrolling_marquee(font: Font, clip_rect: Rect2, text: String) -> void:
+		var font_size := 13
+		if _vol_overlay_timer > 0.0 or radio.state == JDMRadioAudioSystem.StreamState.BUFFERING:
+			draw_string(font, Vector2(clip_rect.position.x, clip_rect.position.y + 15), text, HORIZONTAL_ALIGNMENT_LEFT, clip_rect.size.x, font_size, COL_VFD_AMBER)
+			return
+		
+		var text_width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+		if text_width <= clip_rect.size.x:
+			draw_string(font, Vector2(clip_rect.position.x, clip_rect.position.y + 15), text, HORIZONTAL_ALIGNMENT_LEFT, clip_rect.size.x, font_size, COL_VFD_CYAN)
+			return
+		
+		# Continuous seamless loop via modulo offset and character clipping
+		var loop_offset := fmod(_scroll_offset, text_width)
+		var combined := text + text
+		var approx_char_w := maxf(text_width / float(maxi(text.length(), 1)), 6.0)
+		var first_char_idx := int(floor(loop_offset / approx_char_w))
+		var visible_chars := int(ceil(clip_rect.size.x / approx_char_w)) + 4
+		var sub_text := combined.substr(clampi(first_char_idx, 0, combined.length() - 1), visible_chars)
+		var sub_pixel_shift := fmod(loop_offset, approx_char_w)
+		
+		draw_string(
+			font,
+			Vector2(clip_rect.position.x - sub_pixel_shift, clip_rect.position.y + 15),
+			sub_text,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			clip_rect.size.x + approx_char_w * 2.0,
+			font_size,
+			COL_VFD_CYAN
+		)
+	
+	func _draw_spectrum_bars(area: Rect2) -> void:
+		var num_segments: int = 8
+		var bar_spacing: float = 3.0
+		var total_w := area.size.x
+		var bar_w := (total_w - (bar_spacing * float(NUM_BANDS - 1))) / float(NUM_BANDS)
+		var seg_h := (area.size.y - float(num_segments - 1) * 1.5) / float(num_segments)
+		
+		for b in range(NUM_BANDS):
+			var bx := area.position.x + float(b) * (bar_w + bar_spacing)
+			var active_segs := int(round(_band_levels[b] * float(num_segments)))
+			var peak_seg := clampi(int(round(_band_peaks[b] * float(num_segments))), 0, num_segments)
+			
+			for s in range(num_segments):
+				var sy := area.end.y - float(s + 1) * (seg_h + 1.5) + 1.5
+				var seg_rect := Rect2(bx, sy, bar_w, seg_h)
+				
+				if s < active_segs:
+					var col := COL_VFD_CYAN
+					if s >= num_segments - 1:
+						col = COL_VFD_RED_PEAK
+					elif s >= num_segments - 3:
+						col = COL_VFD_AMBER
+					draw_rect(seg_rect, col, true)
+				elif s == peak_seg - 1 and peak_seg > 0:
+					draw_rect(seg_rect, COL_VFD_RED_PEAK, true)
+				else:
+					draw_rect(seg_rect, COL_VFD_CYAN_DIM, true)

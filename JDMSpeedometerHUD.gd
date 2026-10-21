@@ -39,9 +39,13 @@ enum ClusterTheme {
 		if is_instance_valid(_canvas):
 			_canvas.queue_redraw()
 
-@export var hud_scale: float = 1.0
-@export var margin_offset: Vector2 = Vector2(42.0, 36.0)
+@export var hud_scale: float = 0.76
+@export var margin_offset: Vector2 = Vector2(24.0, 22.0)
 @export var play_startup_ceremony: bool = true
+## Hide the auxiliary Boost gauge for a cleaner single-pod look
+@export var show_boost: bool = false
+## Hide the G-Force meter by default
+@export var show_g_meter: bool = false
 
 # Internal drawing node
 var _canvas: _JDMClusterCanvas = null
@@ -82,58 +86,58 @@ var _last_gear: int = 0
 const THEME_PALETTES: Array[Dictionary] = [
 	{ # AMBER_TOKYO_DRIFT
 		"name": "TOKYO AMBER",
-		"bezel_bg": Color(0.035, 0.03, 0.04, 0.92),
-		"bezel_rim": Color(0.18, 0.14, 0.12, 0.95),
-		"ambient_glow": Color(1.0, 0.28, 0.04, 0.18),
+		"bezel_bg": Color(0.018, 0.015, 0.02, 0.48),
+		"bezel_rim": Color(0.24, 0.16, 0.12, 0.85),
+		"ambient_glow": Color(1.0, 0.28, 0.04, 0.12),
 		"primary": Color(1.0, 0.36, 0.06, 1.0),
 		"secondary": Color(1.0, 0.62, 0.15, 1.0),
 		"tick_major": Color(1.0, 0.42, 0.08, 0.95),
 		"tick_minor": Color(0.85, 0.30, 0.06, 0.65),
 		"numbers": Color(1.0, 0.48, 0.12, 0.98),
 		"redline": Color(1.0, 0.08, 0.08, 0.95),
-		"redline_glow": Color(1.0, 0.05, 0.02, 0.28),
+		"redline_glow": Color(1.0, 0.05, 0.02, 0.25),
 		"needle_core": Color(1.0, 0.92, 0.85, 1.0),
 		"needle_glow": Color(1.0, 0.22, 0.02, 0.85),
-		"lcd_bg": Color(0.06, 0.02, 0.01, 0.92),
-		"lcd_ghost": Color(0.22, 0.07, 0.02, 0.35),
+		"lcd_bg": Color(0.04, 0.015, 0.01, 0.68),
+		"lcd_ghost": Color(0.22, 0.07, 0.02, 0.25),
 		"lcd_lit": Color(1.0, 0.42, 0.08, 1.0),
 		"gear_lit": Color(1.0, 0.72, 0.15, 1.0)
 	},
 	{ # CYBER_CYAN
 		"name": "DEFI CYBER CYAN",
-		"bezel_bg": Color(0.02, 0.035, 0.055, 0.92),
-		"bezel_rim": Color(0.12, 0.22, 0.28, 0.95),
-		"ambient_glow": Color(0.0, 0.82, 1.0, 0.18),
+		"bezel_bg": Color(0.012, 0.022, 0.035, 0.48),
+		"bezel_rim": Color(0.14, 0.25, 0.32, 0.85),
+		"ambient_glow": Color(0.0, 0.82, 1.0, 0.12),
 		"primary": Color(0.05, 0.88, 1.0, 1.0),
 		"secondary": Color(0.45, 0.95, 1.0, 1.0),
 		"tick_major": Color(0.15, 0.92, 1.0, 0.95),
 		"tick_minor": Color(0.08, 0.65, 0.82, 0.65),
 		"numbers": Color(0.75, 0.98, 1.0, 0.98),
 		"redline": Color(1.0, 0.12, 0.38, 0.95),
-		"redline_glow": Color(1.0, 0.08, 0.32, 0.28),
+		"redline_glow": Color(1.0, 0.08, 0.32, 0.25),
 		"needle_core": Color(1.0, 0.96, 0.98, 1.0),
 		"needle_glow": Color(1.0, 0.12, 0.28, 0.88),
-		"lcd_bg": Color(0.01, 0.04, 0.07, 0.92),
-		"lcd_ghost": Color(0.04, 0.18, 0.24, 0.35),
+		"lcd_bg": Color(0.01, 0.03, 0.05, 0.68),
+		"lcd_ghost": Color(0.04, 0.18, 0.24, 0.25),
 		"lcd_lit": Color(0.12, 0.94, 1.0, 1.0),
 		"gear_lit": Color(1.0, 0.22, 0.45, 1.0)
 	},
 	{ # PURE_WHITE_GLOW
 		"name": "NISMO PURE WHITE",
-		"bezel_bg": Color(0.03, 0.032, 0.038, 0.93),
-		"bezel_rim": Color(0.22, 0.23, 0.25, 0.95),
-		"ambient_glow": Color(0.85, 0.92, 1.0, 0.15),
+		"bezel_bg": Color(0.018, 0.02, 0.025, 0.48),
+		"bezel_rim": Color(0.24, 0.25, 0.28, 0.85),
+		"ambient_glow": Color(0.85, 0.92, 1.0, 0.10),
 		"primary": Color(0.95, 0.97, 1.0, 1.0),
 		"secondary": Color(0.75, 0.82, 0.92, 1.0),
 		"tick_major": Color(0.96, 0.98, 1.0, 0.96),
 		"tick_minor": Color(0.62, 0.66, 0.72, 0.68),
 		"numbers": Color(0.98, 0.98, 1.0, 0.98),
 		"redline": Color(1.0, 0.10, 0.12, 0.96),
-		"redline_glow": Color(1.0, 0.06, 0.08, 0.30),
+		"redline_glow": Color(1.0, 0.06, 0.08, 0.25),
 		"needle_core": Color(1.0, 0.95, 0.95, 1.0),
 		"needle_glow": Color(1.0, 0.08, 0.10, 0.90),
-		"lcd_bg": Color(0.03, 0.035, 0.045, 0.92),
-		"lcd_ghost": Color(0.14, 0.15, 0.18, 0.38),
+		"lcd_bg": Color(0.02, 0.025, 0.03, 0.68),
+		"lcd_ghost": Color(0.14, 0.15, 0.18, 0.28),
 		"lcd_lit": Color(0.96, 0.98, 1.0, 1.0),
 		"gear_lit": Color(1.0, 0.16, 0.18, 1.0)
 	}
@@ -163,6 +167,23 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_C or event.physical_keycode == KEY_C:
 			current_theme = ((int(current_theme) + 1) % THEME_PALETTES.size()) as ClusterTheme
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_B or event.physical_keycode == KEY_B:
+			show_boost = not show_boost
+			_canvas.queue_redraw()
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_G or event.physical_keycode == KEY_G:
+			show_g_meter = not show_g_meter
+			_canvas.queue_redraw()
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_F8 or event.physical_keycode == KEY_F8:
+			if hud_scale <= 0.70:
+				hud_scale = 0.82
+			elif hud_scale <= 0.85:
+				hud_scale = 1.0
+			else:
+				hud_scale = 0.65
+			_canvas.queue_redraw()
 			get_viewport().set_input_as_handled()
 
 
@@ -479,24 +500,27 @@ class _JDMClusterCanvas extends Control:
 		var pal: Dictionary = JDMSpeedometerHUD.THEME_PALETTES[_hud.current_theme]
 		var font: Font = ThemeDB.fallback_font
 
-		# Anchor positions in bottom-right JDM cockpit layout
-		var tach_radius: float = 148.0 * ui_scale
+		# Compact, sleek JDM single-pod layout
+		var tach_radius: float = 112.0 * ui_scale
 		var tach_center: Vector2 = Vector2(
 			vp_size.x - _hud.margin_offset.x * ui_scale - tach_radius,
 			vp_size.y - _hud.margin_offset.y * ui_scale - tach_radius
 		)
 
-		var boost_radius: float = 74.0 * ui_scale
-		var boost_center: Vector2 = tach_center + Vector2(-tach_radius * 1.54, tach_radius * 0.28)
+		var boost_radius: float = 62.0 * ui_scale
+		var boost_center: Vector2 = tach_center + Vector2(-tach_radius * 1.45, tach_radius * 0.22)
 
-		var g_radius: float = 56.0 * ui_scale
-		var g_center: Vector2 = boost_center + Vector2(-boost_radius * 1.15, -boost_radius * 1.25)
+		var g_radius: float = 48.0 * ui_scale
+		var g_center: Vector2 = boost_center + Vector2(-boost_radius * 1.10, -boost_radius * 1.15)
 
-		# Draw Satellite Gauges first so Main Tachometer bezel overlaps cleanly like a real pod
-		_draw_g_force_meter(g_center, g_radius, ui_scale, pal, font)
-		_draw_boost_gauge(boost_center, boost_radius, ui_scale, pal, font)
+		# Draw Satellite Gauges conditionally (Clean default mode: single main pod)
+		if _hud.show_g_meter:
+			_draw_g_force_meter(g_center, g_radius, ui_scale, pal, font)
+		if _hud.show_boost:
+			_draw_boost_gauge(boost_center, boost_radius, ui_scale, pal, font)
+
 		_draw_main_tachometer(tach_center, tach_radius, ui_scale, pal, font)
-		_draw_shift_light_bar(tach_center + Vector2(0.0, -tach_radius - 26.0 * ui_scale), tach_radius, ui_scale, pal, font)
+		_draw_shift_light_bar(tach_center + Vector2(0.0, -tach_radius - 16.0 * ui_scale), tach_radius, ui_scale, pal, font)
 		_draw_status_footer(tach_center, tach_radius, boost_center, boost_radius, ui_scale, pal, font)
 
 	# --------------------------------------------------------------------------
@@ -867,17 +891,17 @@ class _JDMClusterCanvas extends Control:
 	# --------------------------------------------------------------------------
 	# 6. HOTKEY & THEME TELEMETRY FOOTER
 	# --------------------------------------------------------------------------
-	func _draw_status_footer(tach_c: Vector2, tach_r: float, boost_c: Vector2, boost_r: float, s: float, pal: Dictionary, font: Font) -> void:
-		var footer_pos: Vector2 = Vector2(boost_c.x - boost_r * 0.9, tach_c.y + tach_r - 4.0 * s)
-		var info_str: String = "[H] HUD  [C] %s" % pal["name"]
+	func _draw_status_footer(tach_c: Vector2, tach_r: float, _boost_c: Vector2, _boost_r: float, s: float, pal: Dictionary, font: Font) -> void:
+		var footer_pos: Vector2 = Vector2(tach_c.x - tach_r * 0.95, tach_c.y + tach_r + 14.0 * s)
+		var info_str: String = "[C] %s  [B] Boost  [G] G-Force  [F8] Scale  [H] Hide" % pal["name"]
 		draw_string(
 			font,
 			footer_pos,
 			info_str,
 			HORIZONTAL_ALIGNMENT_LEFT,
 			-1,
-			maxi(8, int(10.5 * s)),
-			pal["secondary"] * Color(1, 1, 1, 0.58)
+			maxi(7, int(8.5 * s)),
+			pal["secondary"] * Color(1, 1, 1, 0.45)
 		)
 
 	# --------------------------------------------------------------------------

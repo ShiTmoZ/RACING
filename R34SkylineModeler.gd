@@ -39,6 +39,9 @@ extends Node3D
 		headlights_on = value
 		_update_lighting_state()
 
+var _spot_l: SpotLight3D = null
+var _spot_r: SpotLight3D = null
+
 @export var is_reversing: bool = false:
 	set(value):
 		is_reversing = value
@@ -291,6 +294,10 @@ func _update_lighting_state() -> void:
 
 	if _mat_headlight_xenon:
 		_mat_headlight_xenon.emission_energy_multiplier = 5.5 if headlights_on else 0.4
+	if _spot_l:
+		_spot_l.visible = headlights_on
+	if _spot_r:
+		_spot_r.visible = headlights_on
 
 	if _mat_reverse_light:
 		_mat_reverse_light.emission_energy_multiplier = 4.5 if is_reversing else 0.0
@@ -697,6 +704,23 @@ func _build_lighting_assemblies(parent: Node3D) -> void:
 
 		# Clear Glass Polycarbonate Aero Cover Lens over the entire projector assembly
 		_add_box_to_st(st_lens, Vector3(side * 0.56, 0.57, head_z - 0.025), Vector3(0.39, 0.135, 0.018))
+
+		# Active Forward Projector SpotLight3D Beam (5500K Crisp Xenon)
+		var beam := SpotLight3D.new()
+		beam.name = "XenonBeam_" + ("L" if side < 0.0 else "R")
+		beam.position = Vector3(side * 0.58, 0.57, head_z - 0.06)
+		beam.rotation_degrees = Vector3(-4.0, -2.5 * side, 0.0)
+		beam.light_color = Color(0.86, 0.93, 1.0)
+		beam.light_energy = 6.0
+		beam.spot_range = 65.0
+		beam.spot_angle = 38.0
+		beam.spot_attenuation = 0.85
+		beam.shadow_enabled = true
+		parent.add_child(beam)
+		if side < 0.0:
+			_spot_l = beam
+		else:
+			_spot_r = beam
 
 	_commit_surface_to_node(st_halo, "Taillights_QuadHalos", _mat_taillight_halo, parent)
 	_commit_surface_to_node(st_xenon, "Headlights_XenonProjectors", _mat_headlight_xenon, parent)

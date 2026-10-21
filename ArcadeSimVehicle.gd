@@ -363,7 +363,7 @@ func _apply_suspension_and_tires(delta: float) -> void:
 		if _is_driven[i] == 1:
 			longitudinal += drive_per_wheel
 
-		var brake_amount := brake_input
+		var brake_amount := throttle_input if is_reversing else brake_input
 		if locked:
 			brake_amount = 1.0
 		if brake_amount > 0.0:
@@ -469,6 +469,9 @@ func respawn_at(target: Transform3D) -> void:
 	global_transform = target
 	linear_velocity = Vector3.ZERO
 	angular_velocity = Vector3.ZERO
+	PhysicsServer3D.body_set_state(get_rid(), PhysicsServer3D.BODY_STATE_TRANSFORM, target)
+	PhysicsServer3D.body_set_state(get_rid(), PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, Vector3.ZERO)
+	PhysicsServer3D.body_set_state(get_rid(), PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY, Vector3.ZERO)
 	steer_angle = 0.0
 	throttle_input = 0.0
 	brake_input = 0.0
