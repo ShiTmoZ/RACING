@@ -1329,6 +1329,15 @@ func _spawn_player_vehicle() -> void:
 		_referee_mgr.call("set_target_vehicle", _spawned_vehicle)
 	if _atmosphere_mgr != null and _atmosphere_mgr.has_method("set_target_vehicle"):
 		_atmosphere_mgr.call("set_target_vehicle", _spawned_vehicle)
+	
+	# Attach Initial D Anime Car VFX (Taillight ribbons, cel smoke, backfire, sparks)
+	var anime_vfx_script := load("res://InitialDAnimeCarVFX.gd")
+	if anime_vfx_script != null:
+		var vfx_inst = anime_vfx_script.new()
+		vfx_inst.name = "InitialDAnimeCarVFX"
+		_spawned_vehicle.add_child(vfx_inst)
+		if "target_vehicle" in vfx_inst:
+			vfx_inst.set("target_vehicle", _spawned_vehicle)
 	_spawned_vehicle.global_transform = _spawn_transform
 	if _spawned_vehicle.has_method("set_spawn_transform"):
 		_spawned_vehicle.call("set_spawn_transform", _spawn_transform)
