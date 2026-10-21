@@ -441,7 +441,10 @@ func _compute_axle_drive_torque() -> void:
 
 	# Turbo multiplier: authentic off-boost lag (<3000 RPM) -> violent surge (3800-6800 RPM)
 	var boost_multiplier: float = 1.0
-	if current_boost_bar < 0.0:
+	if is_reversing:
+		# Instant crisp reverse torque without turbo vacuum choking
+		boost_multiplier = 1.15
+	elif current_boost_bar < 0.0:
 		# Off-boost low compression ratio (8.5:1) feel in vacuum
 		var vac_ratio: float = clampf(current_boost_bar / absf(min_vacuum_bar), -1.0, 0.0)
 		boost_multiplier = lerpf(0.82, 1.0, 1.0 + vac_ratio)
@@ -485,7 +488,7 @@ func _evaluate_rb26_base_ve(rpm: float) -> float:
 
 func get_active_gear_ratio() -> float:
 	if is_reversing or current_gear == -1:
-		return -reverse_ratio
+		return -absf(reverse_ratio)
 	var idx: int = clampi(current_gear - 1, 0, gear_ratios.size() - 1)
 	return gear_ratios[idx]
 

@@ -436,9 +436,12 @@ func _generate_touge_curve() -> void:
 		Vector3(-330.0, 120.0, -200.0),
 		Vector3(-220.0, 140.0, -310.0),
 		
-		# 31-32: Final Summit Chicane & Pit Entry back to Start Line
-		Vector3(-95.0, 153.0, -180.0),
-		Vector3(-35.0, 158.5, -75.0)
+		# 31-34: Final Summit Scenic Loop & Pit Entry back to Start Line
+		# Generously separated from start straight (X >= -75m) to prevent any mountain clipping
+		Vector3(-120.0, 152.0, -180.0),
+		Vector3(-75.0, 157.0, -75.0),
+		Vector3(-45.0, 159.0, 15.0),
+		Vector3(-20.0, 160.0, 25.0)
 	])
 	
 	var count: int = waypoints.size()

@@ -348,10 +348,12 @@ func _inject_vehicle_parameters(target_car: Node3D, specs: Dictionary) -> void:
 	# Core Physics & Drivetrain Properties required by ArcadeSimVehicle.gd
 	if "mass" in target_car:
 		target_car.set("mass", float(specs["mass"]))
+	if "base_peak_torque_nm" in target_car and "engine_peak_torque" in specs:
+		target_car.set("base_peak_torque_nm", float(specs["engine_peak_torque"]))
 	if "engine_peak_torque" in target_car:
 		target_car.set("engine_peak_torque", float(specs["engine_peak_torque"]))
 	if "reverse_ratio" in target_car:
-		target_car.set("reverse_ratio", float(specs["reverse_ratio"]))
+		target_car.set("reverse_ratio", absf(float(specs["reverse_ratio"])))
 	if "final_drive" in target_car:
 		target_car.set("final_drive", float(specs["final_drive"]))
 	if "redline_rpm" in target_car:
