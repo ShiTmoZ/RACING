@@ -85,6 +85,7 @@ func _ready() -> void:
 		call_deferred("_setup_track_registry_and_menu")
 		call_deferred("_setup_sector_split_and_rank_hud")
 		call_deferred("_setup_ai_rival_racer")
+		call_deferred("_setup_anime_jdm_visual_enhancer")
 
 
 var _referee_mgr: Node = null
@@ -95,6 +96,18 @@ var _track_registry_menu: CanvasLayer = null
 
 var _sector_rank_hud: CanvasLayer = null
 var _ai_rival_car: RigidBody3D = null
+var _anime_enhancer: Node3D = null
+
+func _setup_anime_jdm_visual_enhancer() -> void:
+	var enh_script := load("res://AnimeJDMVisualEnhancer.gd")
+	if enh_script != null:
+		_anime_enhancer = enh_script.new() as Node3D
+		if _anime_enhancer != null:
+			_anime_enhancer.name = "AnimeJDMVisualEnhancer"
+			add_child(_anime_enhancer)
+			if _spawned_vehicle != null and _anime_enhancer.has_method("attach_to_car"):
+				_anime_enhancer.call("attach_to_car", _spawned_vehicle, _spawned_vehicle.get_node_or_null("VisualChassisRoot"))
+
 
 func _setup_sector_split_and_rank_hud() -> void:
 	var hud_script := load("res://TougeSectorSplitAndRankHUD.gd")
@@ -1385,6 +1398,8 @@ func _spawn_player_vehicle() -> void:
 		_sector_rank_hud.call("bind_telemetry", _spawned_vehicle, _referee_mgr)
 	if _ai_rival_car != null and _ai_rival_car.has_method("set_player_target"):
 		_ai_rival_car.call("set_player_target", _spawned_vehicle)
+	if _anime_enhancer != null and is_instance_valid(_anime_enhancer) and _anime_enhancer.has_method("attach_to_car"):
+		_anime_enhancer.call("attach_to_car", _spawned_vehicle, _spawned_vehicle.get_node_or_null("VisualChassisRoot"))
 	
 	# Attach Initial D Anime Car VFX (Taillight ribbons, cel smoke, backfire, sparks)
 	var anime_vfx_script := load("res://InitialDAnimeCarVFX.gd")
@@ -1676,6 +1691,9 @@ func _process(_delta: float) -> void:
 				in_gutter = bool(_referee_mgr.call("is_gutter_hooked"))
 
 		_digital_cluster.update_telemetry(speed, rpm, max_rpm, gear, throttle, brake, drift_angle_deg, in_gutter)
+		if _anime_enhancer != null and is_instance_valid(_anime_enhancer) and _anime_enhancer.has_method("update_enhancer"):
+			var is_drifting: bool = absf(drift_angle_deg) > 12.0
+			_anime_enhancer.call("update_enhancer", _delta, speed, drift_angle_deg, is_drifting, rpm)
 
 	if _speed_val_label != null and _spawned_vehicle != null and is_instance_valid(_spawned_vehicle):
 		var spd_val: float = float(_spawned_vehicle.get("speed_kmh")) if "speed_kmh" in _spawned_vehicle else 0.0
