@@ -132,6 +132,7 @@ func build_vehicle_mesh() -> Node3D:
 
 	# 5. Exterior Details (JDM Aero Mirrors, Wipers, Door Handles, Kanji Decal)
 	_build_exterior_details(chassis_root)
+	_build_ae86_livery_panels(chassis_root)
 
 	# 6. Detailed RHD Cockpit (Bride Seats, Roll Cage, TRD 12k Tach, Nardi Wheel)
 	_build_detailed_cockpit(chassis_root)
@@ -1522,3 +1523,132 @@ func _spawn_mesh(
 	mi.rotation_degrees = rot_deg
 	parent.add_child(mi)
 	return mi
+
+# Creates the dedicated Itasha Rem livery material
+func _create_itasha_livery_material(base_tint: Color = Color.WHITE) -> StandardMaterial3D:
+	var livery_mat := StandardMaterial3D.new()
+	if ResourceLoader.exists("res://textures/itasha_rem.png"):
+		livery_mat.albedo_texture = load("res://textures/itasha_rem.png")
+	livery_mat.albedo_color = base_tint
+	livery_mat.roughness = 0.25
+	livery_mat.metallic = 0.15
+	livery_mat.specular = 0.75
+	livery_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return livery_mat
+
+# Adds a 4-vertex quad with explicit UV mapping and computed face normal
+func _st_add_quad_uv(
+	st: SurfaceTool,
+	p1: Vector3, p2: Vector3, p3: Vector3, p4: Vector3,
+	uv1: Vector2, uv2: Vector2, uv3: Vector2, uv4: Vector2
+) -> void:
+	var normal: Vector3 = (p2 - p1).cross(p3 - p1).normalized()
+	if normal.length_squared() < 0.0001:
+		normal = Vector3.UP
+	st.set_normal(normal)
+	
+	# Triangle 1: p1 -> p2 -> p3
+	st.set_uv(uv1)
+	st.add_vertex(p1)
+	st.set_uv(uv2)
+	st.add_vertex(p2)
+	st.set_uv(uv3)
+	st.add_vertex(p3)
+	
+	# Triangle 2: p1 -> p3 -> p4
+	st.set_uv(uv1)
+	st.add_vertex(p1)
+	st.set_uv(uv3)
+	st.add_vertex(p3)
+	st.set_uv(uv4)
+	st.add_vertex(p4)
+
+# Inside AE86TruenoModeler.gd
+func _build_ae86_livery_panels(root: Node3D, base_color: Color = Color.WHITE) -> MeshInstance3D:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	
+	var livery_mat: StandardMaterial3D = _create_itasha_livery_material(base_color)
+	st.set_material(livery_mat)
+	
+	# -------------------------------------------------------------------------
+	# 1. AE86 Hood (Bonnet) Panel - Normalized X (Width) & Z (Length) [0..1]
+	# -------------------------------------------------------------------------
+	var hood_w_front: float = 0.76
+	var hood_w_rear: float = 0.80
+	var hood_z_front: float = 1.98
+	var hood_z_rear: float = 0.72
+	var hood_y_front: float = 0.64
+	var hood_y_rear: float = 0.715
+	
+	var h_fl := Vector3(-hood_w_front, hood_y_front, hood_z_front)
+	var h_fr := Vector3(hood_w_front, hood_y_front, hood_z_front)
+	var h_rr := Vector3(hood_w_rear, hood_y_rear, hood_z_rear)
+	var h_rl := Vector3(-hood_w_rear, hood_y_rear, hood_z_rear)
+	
+	_st_add_quad_uv(
+		st,
+		h_fl, h_fr, h_rr, h_rl,
+		Vector2(0.0, 1.0), Vector2(1.0, 1.0), Vector2(1.0, 0.0), Vector2(0.0, 0.0)
+	)
+	
+	# -------------------------------------------------------------------------
+	# 2. AE86 Left & Right Door Panels - Normalized Z (Length) & Y (Height) [0..1]
+	# -------------------------------------------------------------------------
+	var side_x_bottom: float = 0.855
+	var side_x_top: float = 0.825
+	var door_z_front: float = 0.72
+	var door_z_rear: float = -0.85
+	var door_y_bottom: float = 0.24
+	var door_y_top: float = 0.71
+	
+	# Left Side Door (-X)
+	var l_tl := Vector3(-side_x_top, door_y_top, door_z_front)
+	var l_tr := Vector3(-side_x_top, door_y_top, door_z_rear)
+	var l_br := Vector3(-side_x_bottom, door_y_bottom, door_z_rear)
+	var l_bl := Vector3(-side_x_bottom, door_y_bottom, door_z_front)
+	
+	_st_add_quad_uv(
+		st,
+		l_tl, l_tr, l_br, l_bl,
+		Vector2(0.0, 0.0), Vector2(1.0, 0.0), Vector2(1.0, 1.0), Vector2(0.0, 1.0)
+	)
+	
+	# Right Side Door (+X) - Mirrored horizontally along Z so texture stays upright
+	var r_tl := Vector3(side_x_top, door_y_top, door_z_rear)
+	var r_tr := Vector3(side_x_top, door_y_top, door_z_front)
+	var r_br := Vector3(side_x_bottom, door_y_bottom, door_z_front)
+	var r_bl := Vector3(side_x_bottom, door_y_bottom, door_z_rear)
+	
+	_st_add_quad_uv(
+		st,
+		r_tl, r_tr, r_br, r_bl,
+		Vector2(0.0, 0.0), Vector2(1.0, 0.0), Vector2(1.0, 1.0), Vector2(0.0, 1.0)
+	)
+	
+	# -------------------------------------------------------------------------
+	# 3. AE86 Roof Panel - Normalized X & Z [0..1]
+	# -------------------------------------------------------------------------
+	var roof_w: float = 0.68
+	var roof_y: float = 1.165
+	var roof_z_front: float = 0.15
+	var roof_z_rear: float = -0.82
+	
+	_st_add_quad_uv(
+		st,
+		Vector3(-roof_w, roof_y, roof_z_front),
+		Vector3(roof_w, roof_y, roof_z_front),
+		Vector3(roof_w, roof_y, roof_z_rear),
+		Vector3(-roof_w, roof_y, roof_z_rear),
+		Vector2(0.0, 1.0), Vector2(1.0, 1.0), Vector2(1.0, 0.0), Vector2(0.0, 0.0)
+	)
+	
+	st.generate_tangents()
+	var livery_mesh: ArrayMesh = st.commit()
+	
+	var mesh_inst := MeshInstance3D.new()
+	mesh_inst.name = "AE86ItashaLiveryBody"
+	mesh_inst.mesh = livery_mesh
+	mesh_inst.material_override = livery_mat
+	root.add_child(mesh_inst)
+	return mesh_inst

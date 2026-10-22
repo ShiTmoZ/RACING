@@ -1,424 +1,176 @@
-class_name ItashaAnimeGirlLivery
 extends Node3D
+class_name ItashaAnimeGirlLivery
 
-## Rem (Re:Zero) Itasha Racing Livery Generator & Decal Projector
-## Designed for Godot 4.3 Forward+ (AE86 / JDM Coupes)
+const LIVERY_TEXTURE_PATH: String = "res://textures/itasha_rem.png"
 
-const REM_TEXTURE_PATH: String = "res://textures/itasha_rem.png"
-
-# Livery Color Palette (Rem Theme)
-const COLOR_SKY_BLUE: String = "#4AB3F4"
-const COLOR_DEEP_BLUE: String = "#1B4965"
-const COLOR_MIDNIGHT: String = "#0D1B2A"
-const COLOR_SAKURA_PINK: String = "#FF70A6"
-const COLOR_CRYSTAL_WHITE: String = "#FFFFFF"
-
-## Visual layer mask for the car body mesh so decals do not project onto glass, tires, or the road.
-@export_flags_3d_render var car_body_cull_mask: int = 0xFFFFF
-
-static var _cached_hood_tex: Texture2D = null
-static var _cached_side_l_tex: Texture2D = null
-static var _cached_side_r_tex: Texture2D = null
-
-
-## Main entry point: Attaches the complete Rem Itasha decal rig to a car root Node3D.
-static func attach_to_car(car_root: Node3D) -> Node:
-	if not is_instance_valid(car_root):
-		push_error("ItashaAnimeGirlLivery: Provided car_root is invalid.")
-		return null
-
-	# Remove existing livery node if present to support hot-reloading
-	var existing := car_root.get_node_or_null("ItashaAnimeGirlLivery")
-	if existing:
-		existing.queue_free()
-
-	var livery_script: GDScript = load("res://ItashaAnimeGirlLivery.gd") as GDScript
-	var livery = livery_script.new()
-	livery.name = "ItashaAnimeGirlLivery"
-	car_root.add_child(livery)
-	livery.build_livery()
-	return livery
-
+@export var car_model_type: String = "R34" # "AE86", "FD3S", or "R34"
 
 func _ready() -> void:
-	if get_child_count() == 0:
-		build_livery()
+	apply_itasha_livery()
 
-
-## Builds the textures (if not cached) and spawns the 3D Decal projection nodes.
-func build_livery() -> void:
-	_ensure_textures_generated()
-
-	# Clear any existing decals
+func apply_itasha_livery(target_car_type: String = "") -> void:
+	if not target_car_type.is_empty():
+		car_model_type = target_car_type.to_upper()
+	else:
+		_detect_car_model_type()
+	
+	# Clear any outdated overlay children
 	for child in get_children():
 		child.queue_free()
+	
+	var livery_mat := _build_livery_material()
+	
+	# Also apply livery material to any procedural UV livery meshes on the parent car
+	_bind_to_parent_uv_panels(livery_mat)
+	
+	# Build non-clipping hood & side door plates
+	_create_hood_livery_plate(livery_mat)
+	_create_side_door_plates(livery_mat)
 
-	# -------------------------------------------------------------------------
-	# 1. HOOD DECAL (Projects deep down -Y onto the front hood)
-	# -------------------------------------------------------------------------
-	var hood_decal := Decal.new()
-	hood_decal.name = "Decal_Hood_Rem"
-	hood_decal.texture_albedo = _cached_hood_tex
-	# High projection depth (3.2m) guarantees penetration of all hood geometries
-	hood_decal.size = Vector3(1.65, 3.2, 1.75)
-	hood_decal.position = Vector3(0.0, 0.72, -1.22)
-	hood_decal.rotation_degrees = Vector3(-8.0, 0.0, 0.0)
-	hood_decal.upper_fade = 0.05
-	hood_decal.lower_fade = 0.05
-	hood_decal.normal_fade = 0.35
-	hood_decal.albedo_mix = 1.0
-	hood_decal.cull_mask = car_body_cull_mask
-	add_child(hood_decal)
-
-	# -------------------------------------------------------------------------
-	# 2. LEFT SIDE DECAL (Projects deep into left doors & quarter panel)
-	# -------------------------------------------------------------------------
-	var left_decal := Decal.new()
-	left_decal.name = "Decal_Side_Left_Rem"
-	left_decal.texture_albedo = _cached_side_l_tex
-	left_decal.size = Vector3(3.5, 2.5, 1.25)
-	left_decal.position = Vector3(-0.78, 0.52, 0.05)
-	left_decal.rotation_degrees = Vector3(90.0, -90.0, 0.0)
-	left_decal.upper_fade = 0.05
-	left_decal.lower_fade = 0.05
-	left_decal.normal_fade = 0.40
-	left_decal.albedo_mix = 1.0
-	left_decal.cull_mask = car_body_cull_mask
-	add_child(left_decal)
-
-	# -------------------------------------------------------------------------
-	# 3. RIGHT SIDE DECAL (Projects deep into right doors & quarter panel)
-	# -------------------------------------------------------------------------
-	var right_decal := Decal.new()
-	right_decal.name = "Decal_Side_Right_Rem"
-	right_decal.texture_albedo = _cached_side_r_tex
-	right_decal.size = Vector3(3.5, 2.5, 1.25)
-	right_decal.position = Vector3(0.78, 0.52, 0.05)
-	right_decal.rotation_degrees = Vector3(90.0, 90.0, 0.0)
-	right_decal.upper_fade = 0.05
-	right_decal.lower_fade = 0.05
-	right_decal.normal_fade = 0.40
-	right_decal.albedo_mix = 1.0
-	right_decal.cull_mask = car_body_cull_mask
-	add_child(right_decal)
-
-	# -------------------------------------------------------------------------
-	# 4. DIRECT TEXTURED QUAD MESH PLATES (100% Guaranteed Visibility on all GPUs)
-	# -------------------------------------------------------------------------
-	# Hood Livery Plate
-	var hood_mi := MeshInstance3D.new()
-	hood_mi.name = "Livery_Hood_Rem_Plate"
-	var hood_quad := QuadMesh.new()
-	hood_quad.size = Vector2(1.28, 1.28)
-	hood_mi.mesh = hood_quad
-	hood_mi.position = Vector3(0.0, 0.74, -1.25)
-	hood_mi.rotation_degrees = Vector3(-82.0, 0.0, 0.0)
-	var hood_mat := StandardMaterial3D.new()
-	hood_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	hood_mat.albedo_texture = _cached_hood_tex
-	hood_mat.roughness = 0.28
-	hood_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	hood_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
-	hood_mi.material_override = hood_mat
-	add_child(hood_mi)
-
-	# Left Side Livery Plate
-	var left_mi := MeshInstance3D.new()
-	left_mi.name = "Livery_Side_Left_Rem_Plate"
-	var side_l_quad := QuadMesh.new()
-	side_l_quad.size = Vector2(2.4, 0.85)
-	left_mi.mesh = side_l_quad
-	left_mi.position = Vector3(-0.895, 0.52, 0.02)
-	left_mi.rotation_degrees = Vector3(0.0, -90.0, 0.0)
-	var side_l_mat := StandardMaterial3D.new()
-	side_l_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	side_l_mat.albedo_texture = _cached_side_l_tex
-	side_l_mat.roughness = 0.28
-	side_l_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	side_l_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
-	left_mi.material_override = side_l_mat
-	add_child(left_mi)
-
-	# Right Side Livery Plate
-	var right_mi := MeshInstance3D.new()
-	right_mi.name = "Livery_Side_Right_Rem_Plate"
-	var side_r_quad := QuadMesh.new()
-	side_r_quad.size = Vector2(2.4, 0.85)
-	right_mi.mesh = side_r_quad
-	right_mi.position = Vector3(0.895, 0.52, 0.02)
-	right_mi.rotation_degrees = Vector3(0.0, 90.0, 0.0)
-	var side_r_mat := StandardMaterial3D.new()
-	side_r_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	side_r_mat.albedo_texture = _cached_side_r_tex
-	side_r_mat.roughness = 0.28
-	side_r_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	side_r_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
-	right_mi.material_override = side_r_mat
-	add_child(right_mi)
-
-
-## Loads `res://textures/itasha_rem.png` and composites it with procedural SVG racing graphics.
-static func _ensure_textures_generated() -> void:
-	if _cached_hood_tex != null and _cached_side_l_tex != null and _cached_side_r_tex != null:
+func _detect_car_model_type() -> void:
+	var parent_node := get_parent()
+	if parent_node == null:
 		return
+	var p_name: String = parent_node.name.to_upper()
+	if "AE86" in p_name or "TRUENO" in p_name:
+		car_model_type = "AE86"
+	elif "FD3S" in p_name or "RX7" in p_name or "RX-7" in p_name:
+		car_model_type = "FD3S"
+	elif "R34" in p_name or "SKYLINE" in p_name or "GTR" in p_name:
+		car_model_type = "R34"
 
-	var rem_portrait_img: Image = _load_or_generate_rem_portrait()
+func _build_livery_material() -> StandardMaterial3D:
+	var livery_mat := StandardMaterial3D.new()
+	livery_mat.albedo_texture = load(LIVERY_TEXTURE_PATH)
+	livery_mat.roughness = 0.25
+	livery_mat.metallic = 0.15
+	livery_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	livery_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
+	return livery_mat
 
-	_cached_hood_tex = _build_hood_texture(rem_portrait_img)
-	_cached_side_l_tex = _build_side_texture(rem_portrait_img, false)
-	_cached_side_r_tex = _build_side_texture(rem_portrait_img, true)
+func _bind_to_parent_uv_panels(livery_mat: StandardMaterial3D) -> void:
+	var parent_node := get_parent()
+	if parent_node == null:
+		return
+	for child in parent_node.find_children("*", "MeshInstance3D", true, false):
+		var m_inst := child as MeshInstance3D
+		if m_inst and ("ItashaLiveryBody" in m_inst.name or "Hood" in m_inst.name or "Body" in m_inst.name):
+			m_inst.material_override = livery_mat
 
+func _create_hood_livery_plate(livery_mat: StandardMaterial3D) -> void:
+	var hood_y: float = 0.76
+	var hood_pitch_deg: float = -4.2
+	var hood_size := Vector2(1.42, 1.18)
+	var hood_z: float = 1.35
+	
+	if car_model_type == "AE86":
+		hood_y = 0.72
+		hood_pitch_deg = -3.8
+		hood_size = Vector2(1.36, 1.14)
+		hood_z = 1.34
+	
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_material(livery_mat)
+	
+	var hw: float = hood_size.x * 0.5
+	var hl: float = hood_size.y * 0.5
+	
+	var p1 := Vector3(-hw, 0.0, hl)
+	var p2 := Vector3(hw, 0.0, hl)
+	var p3 := Vector3(hw, 0.0, -hl)
+	var p4 := Vector3(-hw, 0.0, -hl)
+	
+	# Explicit downward normal as required by architectural specification
+	# (with CULL_DISABLED so both top and bottom faces render cleanly)
+	st.set_normal(Vector3.DOWN)
+	
+	st.set_uv(Vector2(0.0, 1.0))
+	st.add_vertex(p1)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+	st.set_uv(Vector2(1.0, 0.0))
+	st.add_vertex(p3)
+	
+	st.set_uv(Vector2(0.0, 1.0))
+	st.add_vertex(p1)
+	st.set_uv(Vector2(1.0, 0.0))
+	st.add_vertex(p3)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p4)
+	
+	st.generate_tangents()
+	
+	var hood_plate := MeshInstance3D.new()
+	hood_plate.name = "ItashaHoodPlate"
+	hood_plate.mesh = st.commit()
+	hood_plate.material_override = livery_mat
+	hood_plate.position = Vector3(0.0, hood_y, hood_z)
+	hood_plate.rotation_degrees = Vector3(hood_pitch_deg, 0.0, 0.0)
+	add_child(hood_plate)
 
-## Attempts to load the pre-bundled PNG texture; falls back to an SVG portrait if missing.
-static func _load_or_generate_rem_portrait() -> Image:
-	if ResourceLoader.exists(REM_TEXTURE_PATH):
-		var tex: Texture2D = load(REM_TEXTURE_PATH)
-		if tex != null and tex.get_image() != null:
-			var img: Image = tex.get_image().duplicate()
-			if img.is_compressed():
-				img.decompress()
-			img.convert(Image.FORMAT_RGBA8)
-			_apply_circular_feather_mask(img)
-			return img
-
-	# Direct Image.load fallback if not yet imported by the editor
-	if FileAccess.file_exists(REM_TEXTURE_PATH):
-		var raw_img := Image.new()
-		if raw_img.load(REM_TEXTURE_PATH) == OK:
-			raw_img.convert(Image.FORMAT_RGBA8)
-			_apply_circular_feather_mask(raw_img)
-			return raw_img
-
-	push_warning("ItashaAnimeGirlLivery: '%s' not found. Generating procedural Rem SVG fallback." % REM_TEXTURE_PATH)
-	return _generate_procedural_rem_portrait(768, 768)
-
-
-## Applies a soft oval vignette and removes green-screen/foliage background edges if the source is opaque.
-static func _apply_circular_feather_mask(img: Image) -> void:
-	var w := img.get_width()
-	var h := img.get_height()
-	var cx := w * 0.5
-	var cy := h * 0.5
-	var rx := w * 0.48
-	var ry := h * 0.48
-
-	for y in range(h):
-		var dy := (float(y) - cy) / ry
-		for x in range(w):
-			var dx := (float(x) - cx) / rx
-			var dist := sqrt(dx * dx + dy * dy)
-			var col := img.get_pixel(x, y)
-
-			# Soft feather at the oval boundary so rectangular screenshots blend cleanly into the livery
-			var radial_alpha := clampf((1.0 - dist) / 0.18, 0.0, 1.0)
-			radial_alpha = radial_alpha * radial_alpha * (3.0 - 2.0 * radial_alpha) # Smoothstep
-
-			# Subtle key out of pure foliage greens near the outer edge (for anime screenshot inputs)
-			var green_dominance := col.g - maxf(col.r, col.b)
-			if green_dominance > 0.08 and dist > 0.45:
-				var green_key := clampf(1.0 - (green_dominance - 0.08) * 5.0, 0.0, 1.0)
-				radial_alpha *= green_key
-
-			col.a *= radial_alpha
-			img.set_pixel(x, y, col)
-
-
-## Builds the 1024x1024 Hood Livery Texture.
-static func _build_hood_texture(rem_img: Image) -> ImageTexture:
-	var bg_svg := """
-	<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
-		<defs>
-			<linearGradient id="skyGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-				<stop offset="0%" stop-color="#4AB3F4" stop-opacity="0.95"/>
-				<stop offset="55%" stop-color="#1B4965" stop-opacity="0.90"/>
-				<stop offset="100%" stop-color="#0D1B2A" stop-opacity="0.95"/>
-			</linearGradient>
-			<linearGradient id="pinkAccent" x1="0%" y1="0%" x2="100%" y2="0%">
-				<stop offset="0%" stop-color="#FF70A6" stop-opacity="0.95"/>
-				<stop offset="100%" stop-color="#FF99C8" stop-opacity="0.85"/>
-			</linearGradient>
-		</defs>
-
-		<!-- Outer Shield / Hood Crest -->
-		<polygon points="512,960 120,620 180,90 512,150 844,90 904,620" fill="url(#skyGrad)" stroke="#FFFFFF" stroke-width="14"/>
-		<polygon points="512,915 160,600 210,125 512,180 814,125 864,600" fill="none" stroke="#FF70A6" stroke-width="6" stroke-dasharray="28,12"/>
-
-		<!-- Dynamic Diagonal Speed Slash -->
-		<polygon points="90,340 934,190 910,275 110,425" fill="#FFFFFF" fill-opacity="0.88"/>
-		<polygon points="110,445 914,295 895,345 125,495" fill="url(#pinkAccent)"/>
-
-		<!-- Maid Headband Frill Geometric Motifs -->
-		<g fill="#FFFFFF" stroke="#0D1B2A" stroke-width="4" opacity="0.9">
-			<polygon points="240,140 280,110 310,155 265,175"/>
-			<polygon points="325,150 365,120 395,165 350,185"/>
-			<polygon points="784,140 744,110 714,155 759,175"/>
-			<polygon points="699,150 659,120 629,165 674,185"/>
-		</g>
-	</svg>
-	"""
-
-	var canvas := Image.create(1024, 1024, true, Image.FORMAT_RGBA8)
-	canvas.load_svg_from_string(bg_svg)
-
-	# Composite Rem Portrait into the center of the hood crest
-	var portrait := rem_img.duplicate()
-	portrait.resize(680, 680, Image.INTERPOLATE_LANCZOS)
-	canvas.blend_rect(portrait, Rect2i(0, 0, 680, 680), Vector2i(172, 165))
-
-	# Foreground Overlay SVG (Typography, Hairpin Crosses, Racing Number & Framing)
-	var fg_svg := """
-	<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
-		<!-- Rem's Signature Pink Hairpin Crosses (Top Right) -->
-		<g stroke="#FF70A6" stroke-width="18" stroke-linecap="round">
-			<line x1="690" y1="210" x2="820" y2="290"/>
-			<line x1="795" y1="190" x2="715" y2="315"/>
-		</g>
-		<g stroke="#FFFFFF" stroke-width="5" stroke-linecap="round">
-			<line x1="690" y1="210" x2="820" y2="290"/>
-			<line x1="795" y1="190" x2="715" y2="315"/>
-		</g>
-
-		<!-- Lower Banner Ribbon -->
-		<polygon points="210,735 814,735 774,835 250,835" fill="#0D1B2A" stroke="#4AB3F4" stroke-width="8"/>
-		<polygon points="235,750 789,750 760,820 264,820" fill="none" stroke="#FFFFFF" stroke-width="3"/>
-
-		<!-- Typography: REM & RE:ZERO -->
-		<text x="512" y="808" font-family="sans-serif" font-size="68" font-weight="900" fill="#FFFFFF" stroke="#4AB3F4" stroke-width="2" text-anchor="middle" letter-spacing="10">REM // レム</text>
-		<text x="512" y="885" font-family="sans-serif" font-size="34" font-weight="bold" fill="#FFFFFF" stroke="#0D1B2A" stroke-width="6" paint-order="stroke" text-anchor="middle" letter-spacing="6">STARTING LIFE IN ANOTHER WORLD</text>
-		<text x="512" y="128" font-family="sans-serif" font-size="36" font-weight="900" fill="#FFFFFF" stroke="#0D1B2A" stroke-width="7" paint-order="stroke" text-anchor="middle" letter-spacing="8">AKINA SPEED STARS // 02</text>
-	</svg>
-	"""
-
-	var fg_img := Image.create(1024, 1024, true, Image.FORMAT_RGBA8)
-	fg_img.load_svg_from_string(fg_svg)
-	canvas.blend_rect(fg_img, Rect2i(0, 0, 1024, 1024), Vector2i.ZERO)
-
-	canvas.generate_mipmaps()
-	return ImageTexture.create_from_image(canvas)
-
-
-## Builds the 2048x1024 Side Livery Texture.
-## When `is_right_side` is true, graphics and portrait are arranged so Rem always faces the front bumper,
-## while keeping all typography readable left-to-right.
-static func _build_side_texture(rem_img: Image, is_right_side: bool) -> ImageTexture:
-	var bg_svg_left := """
-	<svg width="2048" height="1024" viewBox="0 0 2048 1024" xmlns="http://www.w3.org/2000/svg">
-		<defs>
-			<linearGradient id="sideBlue" x1="0%" y1="0%" x2="100%" y2="0%">
-				<stop offset="0%" stop-color="#0D1B2A" stop-opacity="0.95"/>
-				<stop offset="45%" stop-color="#4AB3F4" stop-opacity="0.95"/>
-				<stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.92"/>
-			</linearGradient>
-		</defs>
-
-		<!-- Main Sweeping Aerodynamic Vector Stripes (Left Side: Front is Left, Rear is Right) -->
-		<polygon points="80,680 1920,160 1980,440 160,860" fill="url(#sideBlue)" stroke="#FFFFFF" stroke-width="10"/>
-		<polygon points="140,760 1950,320 1975,410 180,825" fill="#FF70A6" fill-opacity="0.92"/>
-		<polygon points="60,560 1640,120 1710,185 95,625" fill="#FFFFFF" fill-opacity="0.90" stroke="#0D1B2A" stroke-width="6"/>
-
-		<!-- Morning Star Chain / Diamond Tech Accents -->
-		<g fill="#4AB3F4" stroke="#FFFFFF" stroke-width="5">
-			<polygon points="360,520 420,460 480,520 420,580"/>
-			<polygon points="510,480 555,435 600,480 555,525"/>
-			<polygon points="630,445 665,410 700,445 665,480"/>
-		</g>
-	</svg>
-	"""
-
-	var canvas := Image.create(2048, 1024, true, Image.FORMAT_RGBA8)
-	canvas.load_svg_from_string(bg_svg_left)
-
-	# Prepare Rem Portrait (Positioned toward the rear quarter panel, facing forward)
-	var portrait := rem_img.duplicate()
-	portrait.resize(820, 820, Image.INTERPOLATE_LANCZOS)
-	canvas.blend_rect(portrait, Rect2i(0, 0, 820, 820), Vector2i(1060, 90))
-
-	# Mirror the graphic base + portrait horizontally for the right side of the car
-	# so Rem and the speed stripes sweep from front-to-rear identically on both sides.
-	if is_right_side:
-		canvas.flip_x()
-
-	# Overlay readable text & sponsors (drawn unflipped so text is never backwards)
-	var text_x_main := 620 if not is_right_side else 1428
-	var text_x_sub := 580 if not is_right_side else 1468
-	var number_x := 250 if not is_right_side else 1798
-	var hairpin_x := 1180 if not is_right_side else 868
-
-	var fg_svg := """
-	<svg width="2048" height="1024" viewBox="0 0 2048 1024" xmlns="http://www.w3.org/2000/svg">
-		<!-- Racing Number Box near Front Door -->
-		<g transform="translate(%d, 630)">
-			<polygon points="-140,-110 140,-110 115,110 -165,110" fill="#0D1B2A" stroke="#FFFFFF" stroke-width="10"/>
-			<polygon points="-125,-95 125,-95 103,95 -148,95" fill="none" stroke="#FF70A6" stroke-width="4"/>
-			<text x="-10" y="55" font-family="sans-serif" font-size="145" font-weight="900" font-style="italic" fill="#4AB3F4" stroke="#FFFFFF" stroke-width="6" text-anchor="middle">02</text>
-		</g>
-
-		<!-- Main Character & Team Typography -->
-		<text x="%d" y="420" font-family="sans-serif" font-size="135" font-weight="900" font-style="italic" fill="#FFFFFF" stroke="#0D1B2A" stroke-width="18" paint-order="stroke" text-anchor="middle" letter-spacing="6">REM // レム</text>
-		<text x="%d" y="515" font-family="sans-serif" font-size="60" font-weight="900" fill="#FF70A6" stroke="#0D1B2A" stroke-width="12" paint-order="stroke" text-anchor="middle" letter-spacing="8">ゼロから始める異世界生活</text>
-		<text x="%d" y="790" font-family="sans-serif" font-size="52" font-weight="900" fill="#FFFFFF" stroke="#0D1B2A" stroke-width="10" paint-order="stroke" text-anchor="middle" letter-spacing="10">AKINA SPEED STARS</text>
-
-		<!-- Rem Hairpin Cross Accent -->
-		<g transform="translate(%d, 220)" stroke="#FF70A6" stroke-width="16" stroke-linecap="round">
-			<line x1="-55" y1="-35" x2="55" y2="35"/>
-			<line x1="35" y1="-55" x2="-35" y2="55"/>
-		</g>
-	</svg>
-	""" % [number_x, text_x_main, text_x_sub, text_x_sub, hairpin_x]
-
-	var fg_img := Image.create(2048, 1024, true, Image.FORMAT_RGBA8)
-	fg_img.load_svg_from_string(fg_svg)
-	canvas.blend_rect(fg_img, Rect2i(0, 0, 2048, 1024), Vector2i.ZERO)
-
-	canvas.generate_mipmaps()
-	return ImageTexture.create_from_image(canvas)
-
-
-## Procedural SVG fallback of Rem (Re:Zero) if `res://textures/itasha_rem.png` is missing on disk.
-static func _generate_procedural_rem_portrait(width: int, height: int) -> Image:
-	var svg := """
-	<svg width="%d" height="%d" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-		<!-- Soft Glowing Halo Background -->
-		<circle cx="256" cy="256" r="235" fill="#4AB3F4" fill-opacity="0.25" stroke="#FFFFFF" stroke-width="8"/>
-
-		<!-- Maid Collar & Shoulders -->
-		<path d="M 110,490 Q 256,410 402,490 Z" fill="#1B4965" stroke="#0D1B2A" stroke-width="6"/>
-		<path d="M 155,440 Q 256,395 357,440 L 330,495 L 182,495 Z" fill="#FFFFFF" stroke="#B8C6D8" stroke-width="5"/>
-
-		<!-- Back Hair -->
-		<circle cx="256" cy="245" r="155" fill="#5BC0BE" stroke="#1B4965" stroke-width="6"/>
-
-		<!-- Face / Skin -->
-		<path d="M 150,235 Q 150,375 256,395 Q 362,375 362,235 Z" fill="#FFF0F3" stroke="#E0B1CB" stroke-width="4"/>
-
-		<!-- Left Visible Eye (Rem's Right Eye is covered by bangs) -->
-		<ellipse cx="308" cy="282" rx="28" ry="34" fill="#FFFFFF" stroke="#0D1B2A" stroke-width="5"/>
-		<ellipse cx="306" cy="285" rx="20" ry="26" fill="#2EC4B6"/>
-		<circle cx="306" cy="286" r="11" fill="#0D1B2A"/>
-		<circle cx="314" cy="274" r="7" fill="#FFFFFF"/>
-		<path d="M 272,256 Q 308,240 342,262" fill="none" stroke="#0D1B2A" stroke-width="7" stroke-linecap="round"/>
-
-		<!-- Soft Blush & Expression -->
-		<ellipse cx="200" cy="322" rx="18" ry="9" fill="#FF70A6" fill-opacity="0.45"/>
-		<ellipse cx="322" cy="322" rx="18" ry="9" fill="#FF70A6" fill-opacity="0.45"/>
-		<circle cx="256" cy="352" r="5" fill="#FF70A6" stroke="#802F4E" stroke-width="2"/>
-
-		<!-- Signature Sky-Blue Bangs Covering Right Eye -->
-		<path d="M 105,230 Q 120,100 256,95 Q 390,100 405,240 L 372,330 L 348,215 L 270,215 L 265,335 L 135,335 Z" fill="#6CD4FF" stroke="#1B4965" stroke-width="5"/>
-
-		<!-- Pink X-Hairpin & Ribbon -->
-		<g stroke="#FF70A6" stroke-width="9" stroke-linecap="round">
-			<line x1="288" y1="165" x2="335" y2="195"/>
-			<line x1="325" y1="158" x2="295" y2="202"/>
-		</g>
-		<path d="M 358,145 L 395,120 L 390,165 L 358,155 L 395,180 L 385,215 L 352,175 Z" fill="#FF70A6" stroke="#802F4E" stroke-width="4"/>
-
-		<!-- Maid Frill Headband -->
-		<path d="M 145,125 Q 256,65 367,125" fill="none" stroke="#0D1B2A" stroke-width="22" stroke-linecap="round"/>
-		<path d="M 140,122 Q 256,60 372,122" fill="none" stroke="#FFFFFF" stroke-width="14" stroke-dasharray="22,10" stroke-linecap="round"/>
-	</svg>
-	""" % [width, height]
-
-	var img := Image.create(width, height, true, Image.FORMAT_RGBA8)
-	img.load_svg_from_string(svg)
-	return img
+func _create_side_door_plates(livery_mat: StandardMaterial3D) -> void:
+	var side_x_offset: float = 0.91
+	var door_length: float = 1.56
+	var door_height: float = 0.48
+	var door_y_center: float = 0.48
+	var door_z_center: float = -0.08
+	
+	var half_l: float = door_length * 0.5
+	var half_h: float = door_height * 0.5
+	
+	# Left Door Plate (X = -0.91m)
+	var st_left := SurfaceTool.new()
+	st_left.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st_left.set_material(livery_mat)
+	st_left.set_normal(Vector3.LEFT)
+	
+	st_left.set_uv(Vector2(0.0, 0.0))
+	st_left.add_vertex(Vector3(0.0, half_h, half_l))
+	st_left.set_uv(Vector2(1.0, 0.0))
+	st_left.add_vertex(Vector3(0.0, half_h, -half_l))
+	st_left.set_uv(Vector2(1.0, 1.0))
+	st_left.add_vertex(Vector3(0.0, -half_h, -half_l))
+	
+	st_left.set_uv(Vector2(0.0, 0.0))
+	st_left.add_vertex(Vector3(0.0, half_h, half_l))
+	st_left.set_uv(Vector2(1.0, 1.0))
+	st_left.add_vertex(Vector3(0.0, -half_h, -half_l))
+	st_left.set_uv(Vector2(0.0, 1.0))
+	st_left.add_vertex(Vector3(0.0, -half_h, half_l))
+	st_left.generate_tangents()
+	
+	var left_plate := MeshInstance3D.new()
+	left_plate.name = "ItashaDoorPlateLeft"
+	left_plate.mesh = st_left.commit()
+	left_plate.material_override = livery_mat
+	left_plate.position = Vector3(-side_x_offset, door_y_center, door_z_center)
+	add_child(left_plate)
+	
+	# Right Door Plate (X = +0.91m)
+	var st_right := SurfaceTool.new()
+	st_right.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st_right.set_material(livery_mat)
+	st_right.set_normal(Vector3.RIGHT)
+	
+	st_right.set_uv(Vector2(0.0, 0.0))
+	st_right.add_vertex(Vector3(0.0, half_h, -half_l))
+	st_right.set_uv(Vector2(1.0, 0.0))
+	st_right.add_vertex(Vector3(0.0, half_h, half_l))
+	st_right.set_uv(Vector2(1.0, 1.0))
+	st_right.add_vertex(Vector3(0.0, -half_h, half_l))
+	
+	st_right.set_uv(Vector2(0.0, 0.0))
+	st_right.add_vertex(Vector3(0.0, half_h, -half_l))
+	st_right.set_uv(Vector2(1.0, 1.0))
+	st_right.add_vertex(Vector3(0.0, -half_h, half_l))
+	st_right.set_uv(Vector2(0.0, 1.0))
+	st_right.add_vertex(Vector3(0.0, -half_h, -half_l))
+	st_right.generate_tangents()
+	
+	var right_plate := MeshInstance3D.new()
+	right_plate.name = "ItashaDoorPlateRight"
+	right_plate.mesh = st_right.commit()
+	right_plate.material_override = livery_mat
+	right_plate.position = Vector3(side_x_offset, door_y_center, door_z_center)
+	add_child(right_plate)

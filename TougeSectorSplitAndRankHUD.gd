@@ -857,6 +857,12 @@ func _draw_sector_split_panel(font: Font, origin: Vector2) -> void:
 
 
 func _draw_drift_rank_panel(font: Font, origin: Vector2) -> void:
+	var vp_size: Vector2 = _hud_canvas.get_viewport_rect().size if is_instance_valid(_hud_canvas) else Vector2(1920.0, 1080.0)
+	var clamped_origin := Vector2(
+		clampf(origin.x, 24.0, maxf(vp_size.x - 364.0, 24.0)),
+		clampf(origin.y, 22.0, 234.0)
+	)
+	origin = clamped_origin
 	var panel_w: float = 340.0
 	var panel_h: float = 212.0
 	var rank_col: Color = RANK_COLORS[clampi(current_rank_index, 0, RANK_COLORS.size() - 1)]

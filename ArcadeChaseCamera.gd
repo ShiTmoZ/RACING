@@ -68,6 +68,14 @@ func set_target(new_target: Node3D) -> void:
 	if is_instance_valid(target):
 		_snap_to_target()
 
+func snap_to_target(new_target: Node3D = null) -> void:
+	if is_instance_valid(new_target):
+		target = new_target
+	_snap_to_target()
+
+func reset_camera_interpolation() -> void:
+	_snap_to_target()
+
 func _snap_to_target() -> void:
 	if not is_instance_valid(target):
 		return

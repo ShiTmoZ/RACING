@@ -12,7 +12,7 @@ extends Node3D
 @export var wheel_finish: Color = Color(0.82, 0.84, 0.88) # Forged Silver/Titanium
 @export var caliper_color: Color = Color(0.85, 0.08, 0.08) # Brembo Red
 @export var headlight_pop_angle: float = 0.0 # 0.0 = Sleek Fixed/Closed, 1.0 = Popped Up
-@export var enable_audio_synthesis: bool = true
+@export var enable_audio_synthesis: bool = false # Muted by default so VehicleVFXAndAudio handles master audio
 
 var WheelFL: Node3D
 var WheelFR: Node3D
@@ -351,6 +351,7 @@ func _build_entire_fd3s_car() -> void:
 
 	# 6. Aero Mirrors, Side Skirts & Fender Vents
 	_build_side_aero_and_details(_body_root)
+	_build_fd3s_livery_panels(_body_root)
 
 	# 7. 17-Inch Forged Double-Spoke Wheels & Brembo Brake Assemblies
 	_build_wheels_and_brakes()
@@ -1092,3 +1093,126 @@ func _create_cylinder_instance(
 	inst.material_override = mat
 	parent.add_child(inst)
 	return inst
+
+# Creates the dedicated Itasha Rem livery material
+func _create_itasha_livery_material(base_tint: Color = Color.WHITE) -> StandardMaterial3D:
+	var livery_mat := StandardMaterial3D.new()
+	if ResourceLoader.exists("res://textures/itasha_rem.png"):
+		livery_mat.albedo_texture = load("res://textures/itasha_rem.png")
+	livery_mat.albedo_color = base_tint
+	livery_mat.roughness = 0.25
+	livery_mat.metallic = 0.15
+	livery_mat.specular = 0.75
+	livery_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return livery_mat
+
+# Adds a 4-vertex quad with explicit UV mapping and computed face normal
+func _st_add_quad_uv(
+	st: SurfaceTool,
+	p1: Vector3, p2: Vector3, p3: Vector3, p4: Vector3,
+	uv1: Vector2, uv2: Vector2, uv3: Vector2, uv4: Vector2
+) -> void:
+	var normal: Vector3 = (p2 - p1).cross(p3 - p1).normalized()
+	if normal.length_squared() < 0.0001:
+		normal = Vector3.UP
+	st.set_normal(normal)
+	
+	# Triangle 1: p1 -> p2 -> p3
+	st.set_uv(uv1)
+	st.add_vertex(p1)
+	st.set_uv(uv2)
+	st.add_vertex(p2)
+	st.set_uv(uv3)
+	st.add_vertex(p3)
+	
+	# Triangle 2: p1 -> p3 -> p4
+	st.set_uv(uv1)
+	st.add_vertex(p1)
+	st.set_uv(uv3)
+	st.add_vertex(p3)
+	st.set_uv(uv4)
+	st.add_vertex(p4)
+
+# Inside FD3SRx7Modeler.gd
+func _build_fd3s_livery_panels(root: Node3D, base_color: Color = Color.WHITE) -> MeshInstance3D:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	
+	var livery_mat: StandardMaterial3D = _create_itasha_livery_material(base_color)
+	st.set_material(livery_mat)
+	
+	# -------------------------------------------------------------------------
+	# 1. FD3S RX-7 Sculpted Hood (Bonnet) - Normalized X & Z [0..1]
+	# Divided into 2 longitudinal segments to follow FD3S hood curvature cleanly
+	# -------------------------------------------------------------------------
+	var z_front: float = 2.02
+	var z_mid: float = 1.38
+	var z_rear: float = 0.68
+	
+	var y_front: float = 0.61
+	var y_mid: float = 0.70
+	var y_rear: float = 0.755
+	
+	var w_front: float = 0.78
+	var w_mid: float = 0.83
+	var w_rear: float = 0.85
+	
+	# Front-to-Mid Hood Quad (UV V: 1.0 -> 0.5)
+	_st_add_quad_uv(
+		st,
+		Vector3(-w_front, y_front, z_front),
+		Vector3(w_front, y_front, z_front),
+		Vector3(w_mid, y_mid, z_mid),
+		Vector3(-w_mid, y_mid, z_mid),
+		Vector2(0.0, 1.0), Vector2(1.0, 1.0), Vector2(1.0, 0.5), Vector2(0.0, 0.5)
+	)
+	
+	# Mid-to-Rear Hood Quad (UV V: 0.5 -> 0.0)
+	_st_add_quad_uv(
+		st,
+		Vector3(-w_mid, y_mid, z_mid),
+		Vector3(w_mid, y_mid, z_mid),
+		Vector3(w_rear, y_rear, z_rear),
+		Vector3(-w_rear, y_rear, z_rear),
+		Vector2(0.0, 0.5), Vector2(1.0, 0.5), Vector2(1.0, 0.0), Vector2(0.0, 0.0)
+	)
+	
+	# -------------------------------------------------------------------------
+	# 2. FD3S RX-7 Doors / Side Flanks - Normalized Z (Length) & Y (Height) [0..1]
+	# -------------------------------------------------------------------------
+	var side_x_bottom: float = 0.895
+	var side_x_top: float = 0.855
+	var door_z_front: float = 0.75
+	var door_z_rear: float = -0.88
+	var door_y_bottom: float = 0.22
+	var door_y_top: float = 0.74
+	
+	# Left Door Panel (-X)
+	_st_add_quad_uv(
+		st,
+		Vector3(-side_x_top, door_y_top, door_z_front),
+		Vector3(-side_x_top, door_y_top, door_z_rear),
+		Vector3(-side_x_bottom, door_y_bottom, door_z_rear),
+		Vector3(-side_x_bottom, door_y_bottom, door_z_front),
+		Vector2(0.0, 0.0), Vector2(1.0, 0.0), Vector2(1.0, 1.0), Vector2(0.0, 1.0)
+	)
+	
+	# Right Door Panel (+X)
+	_st_add_quad_uv(
+		st,
+		Vector3(side_x_top, door_y_top, door_z_rear),
+		Vector3(side_x_top, door_y_top, door_z_front),
+		Vector3(side_x_bottom, door_y_bottom, door_z_front),
+		Vector3(side_x_bottom, door_y_bottom, door_z_rear),
+		Vector2(0.0, 0.0), Vector2(1.0, 0.0), Vector2(1.0, 1.0), Vector2(0.0, 1.0)
+	)
+	
+	st.generate_tangents()
+	var livery_mesh: ArrayMesh = st.commit()
+	
+	var mesh_inst := MeshInstance3D.new()
+	mesh_inst.name = "FD3SItashaLiveryBody"
+	mesh_inst.mesh = livery_mesh
+	mesh_inst.material_override = livery_mat
+	root.add_child(mesh_inst)
+	return mesh_inst

@@ -24,11 +24,11 @@ extends Node3D
 @export var idle_rpm: float = 950.0
 @export var redline_rpm: float = 8500.0
 @export var rev_limiter_rpm: float = 8350.0
-@export_range(0.0, 2.0) var master_engine_gain: float = 0.85
-@export_range(0.0, 2.0) var turbo_whine_gain: float = 0.40
-@export_range(0.0, 2.0) var bov_flutter_gain: float = 0.95
-@export_range(0.0, 2.0) var backfire_gain: float = 1.15
-@export_range(0.0, 2.0) var tire_screech_gain: float = 0.65
+@export_range(0.0, 2.0) var master_engine_gain: float = 0.42
+@export_range(0.0, 2.0) var turbo_whine_gain: float = 0.22
+@export_range(0.0, 2.0) var bov_flutter_gain: float = 0.65
+@export_range(0.0, 2.0) var backfire_gain: float = 0.75
+@export_range(0.0, 2.0) var tire_screech_gain: float = 0.45
 
 @export_group("Tire Skidmark Settings")
 @export var slip_threshold: float = 2.2 ## Slip velocity (m/s) required to trigger marks/smoke

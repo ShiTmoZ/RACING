@@ -1339,8 +1339,8 @@ func _build_battle_hud() -> void:
 	# 1. Top-Right Battle Status & Gap Panel (Clean non-overlapping under drift panel)
 	_hud_root_panel = PanelContainer.new()
 	_hud_root_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	_hud_root_panel.position = Vector2(-280.0, 160.0)
-	_hud_root_panel.custom_minimum_size = Vector2(260.0, 96.0)
+	_hud_root_panel.position = Vector2(-360.0, 246.0)
+	_hud_root_panel.custom_minimum_size = Vector2(336.0, 134.0)
 	_hud_root_panel.visible = false
 	_hud_root_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
@@ -1482,7 +1482,7 @@ func _build_battle_hud() -> void:
 
 
 func _update_battle_hud(delta: float) -> void:
-	if not battle_active:
+	if not battle_active or battle_mode == BattleMode.TIME_ATTACK_GHOST or battle_concluded:
 		if is_instance_valid(_hud_root_panel) and _hud_root_panel.visible:
 			_hud_root_panel.visible = false
 		if is_instance_valid(_hud_warning_panel) and _hud_warning_panel.visible:
@@ -1490,6 +1490,8 @@ func _update_battle_hud(delta: float) -> void:
 		return
 	elif is_instance_valid(_hud_root_panel) and not _hud_root_panel.visible:
 		_hud_root_panel.visible = true
+	if is_instance_valid(_hud_root_panel):
+		_hud_root_panel.position = Vector2(-360.0, 246.0)
 	_hud_refresh_accum_s += delta
 	_warning_blink_accum_s += delta
 
