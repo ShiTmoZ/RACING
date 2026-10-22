@@ -1,6 +1,15 @@
 @tool
 class_name MountAkinaTouge
 extends Node3D
+
+var _akina_environment_root: Node3D = null
+
+func _get_env_root() -> Node3D:
+	if _akina_environment_root == null or not is_instance_valid(_akina_environment_root):
+		_akina_environment_root = Node3D.new()
+		_akina_environment_root.name = "AkinaDefaultTrack"
+		add_child(_akina_environment_root)
+	return _akina_environment_root
 ## Procedural Japanese Mountain Touge Environment & Track Generator for "ShiTmoZ/RACING"
 ## Designed for Godot 4.3 (Vulkan Forward+)
 
@@ -203,10 +212,10 @@ func _setup_radio_audio_system() -> void:
 
 
 func _build_entire_environment() -> void:
-	# Clean up previous generated children
-	for child in get_children():
-		remove_child(child)
-		child.queue_free()
+	# Clean up previous generated Akina children
+	if is_instance_valid(_akina_environment_root):
+		_akina_environment_root.queue_free()
+		_akina_environment_root = null
 	
 	_frames.clear()
 	
@@ -439,7 +448,7 @@ func _setup_atmosphere_and_lighting() -> void:
 	env.volumetric_fog_ambient_inject = 0.35
 	
 	world_env.environment = env
-	add_child(world_env)
+	_get_env_root().add_child(world_env)
 	
 	# Low-Horizon Golden Hour Sun DirectionalLight3D
 	var sun := DirectionalLight3D.new()
@@ -453,7 +462,7 @@ func _setup_atmosphere_and_lighting() -> void:
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	sun.directional_shadow_max_distance = 350.0
 	sun.rotation_degrees = Vector3(-9.5, -135.0, 0.0) # Low on the horizon
-	add_child(sun)
+	_get_env_root().add_child(sun)
 	
 	# Deep Purple/Blue Rim Counter-Light (Moon/Twilight Sky Bounce)
 	var rim_light := DirectionalLight3D.new()
@@ -463,7 +472,7 @@ func _setup_atmosphere_and_lighting() -> void:
 	rim_light.light_volumetric_fog_energy = 0.8
 	rim_light.shadow_enabled = false
 	rim_light.rotation_degrees = Vector3(-38.0, 45.0, 0.0)
-	add_child(rim_light)
+	_get_env_root().add_child(rim_light)
 	
 	# Dense Valley FogVolume at the base of the mountain ravines
 	var valley_fog := FogVolume.new()
@@ -477,7 +486,7 @@ func _setup_atmosphere_and_lighting() -> void:
 	fog_mat.height_falloff = 0.085
 	fog_mat.edge_fade = 0.25
 	valley_fog.material = fog_mat
-	add_child(valley_fog)
+	_get_env_root().add_child(valley_fog)
 
 
 # ==============================================================================
@@ -805,7 +814,7 @@ func _build_road_and_retaining_mesh() -> void:
 	road_mi.name = "TougeAsphaltAndGutters"
 	road_mi.mesh = road_mesh
 	road_mi.material_override = _mat_road
-	add_child(road_mi)
+	_get_env_root().add_child(road_mi)
 	
 	var road_body := StaticBody3D.new()
 	road_body.name = "RoadTrimeshCollider"
@@ -822,7 +831,7 @@ func _build_road_and_retaining_mesh() -> void:
 	walls_mi.name = "RetainingConcreteWalls"
 	walls_mi.mesh = walls_mesh
 	walls_mi.material_override = _mat_gutter_wall
-	add_child(walls_mi)
+	_get_env_root().add_child(walls_mi)
 	
 	var walls_body := StaticBody3D.new()
 	var walls_col := CollisionShape3D.new()
@@ -837,7 +846,7 @@ func _build_road_and_retaining_mesh() -> void:
 	cliffs_mi.name = "MountainRockFaces"
 	cliffs_mi.mesh = cliffs_mesh
 	cliffs_mi.material_override = _mat_rock_cliff
-	add_child(cliffs_mi)
+	_get_env_root().add_child(cliffs_mi)
 
 
 func _add_quad_to_st(st: SurfaceTool, p00: Vector3, p10: Vector3, p11: Vector3, p01: Vector3) -> void:
@@ -925,7 +934,7 @@ func _build_w_beam_guardrails() -> void:
 	rail_mi.name = "WBeamGuardrails"
 	rail_mi.mesh = rail_mesh
 	rail_mi.material_override = _mat_guardrail
-	add_child(rail_mi)
+	_get_env_root().add_child(rail_mi)
 	
 	# Guardrail Physics Collider
 	var col_mesh: ArrayMesh = st_collider.commit()
@@ -951,7 +960,7 @@ func _build_w_beam_guardrails() -> void:
 	for idx in range(post_transforms.size()):
 		post_mm.set_instance_transform(idx, post_transforms[idx])
 	post_mmi.multimesh = post_mm
-	add_child(post_mmi)
+	_get_env_root().add_child(post_mmi)
 
 
 # ==============================================================================
@@ -997,7 +1006,7 @@ func _build_reflective_cats_eyes() -> void:
 		center_mm.set_instance_transform(i, center_transforms[i])
 	center_mmi.multimesh = center_mm
 	center_mmi.material_override = mat_amber
-	add_child(center_mmi)
+	_get_env_root().add_child(center_mmi)
 	
 	# Outer Shoulder Studs MultiMesh
 	var mat_edge := StandardMaterial3D.new()
@@ -1016,7 +1025,7 @@ func _build_reflective_cats_eyes() -> void:
 		edge_mm.set_instance_transform(i, edge_transforms[i])
 	edge_mmi.multimesh = edge_mm
 	edge_mmi.material_override = mat_edge
-	add_child(edge_mmi)
+	_get_env_root().add_child(edge_mmi)
 
 
 # ==============================================================================
@@ -1031,7 +1040,7 @@ func _build_summit_parking_lot() -> void:
 	lot_root.name = "SummitObservationParkingLot"
 	var lot_basis := Basis(f_start.binormal, f_start.normal, -f_start.tangent).orthonormalized()
 	lot_root.transform = Transform3D(lot_basis, f_start.position - f_start.binormal * 24.0 - f_start.normal * 0.12)
-	add_child(lot_root)
+	_get_env_root().add_child(lot_root)
 	
 	# Paved Observation Deck Slab + Static Collision
 	var lot_slab := MeshInstance3D.new()
@@ -1078,7 +1087,7 @@ func _build_summit_parking_lot() -> void:
 	var grid_marker := Marker3D.new()
 	grid_marker.name = "StartingGridSpawnPoint"
 	grid_marker.global_transform = _spawn_transform
-	add_child(grid_marker)
+	_get_env_root().add_child(grid_marker)
 
 
 # ==============================================================================
@@ -1122,7 +1131,7 @@ func _create_neon_kanji_gantry(frame: RoadFrame, kanji_text: String, sub_text: S
 	gantry.name = "NeonKanjiGantry"
 	var basis := Basis(frame.binormal, frame.normal, -frame.tangent).orthonormalized()
 	gantry.transform = Transform3D(basis, frame.position)
-	add_child(gantry)
+	_get_env_root().add_child(gantry)
 	
 	var span_half: float = (road_width * 0.5) + shoulder_width + gutter_width + 0.8
 	var height: float = 6.8
@@ -1209,7 +1218,7 @@ func _create_torii_gate(frame: RoadFrame) -> void:
 	torii.name = "TraditionalToriiGate"
 	var basis := Basis(frame.binormal, frame.normal, -frame.tangent).orthonormalized()
 	torii.transform = Transform3D(basis, frame.position)
-	add_child(torii)
+	_get_env_root().add_child(torii)
 	
 	var pillar_x: float = (road_width * 0.5) + shoulder_width + gutter_width + 0.55
 	var pillar_h: float = 7.4
@@ -1278,7 +1287,7 @@ func _create_touge_streetlight(frame: RoadFrame) -> void:
 	var basis := Basis(frame.binormal, frame.normal, -frame.tangent).orthonormalized()
 	var x_offset: float = (road_width * 0.5) + shoulder_width + gutter_width + 0.35
 	pole.transform = Transform3D(basis, frame.position + frame.binormal * x_offset)
-	add_child(pole)
+	_get_env_root().add_child(pole)
 	
 	var post_mi := MeshInstance3D.new()
 	var cyl := CylinderMesh.new()
@@ -1694,6 +1703,11 @@ func _process(_delta: float) -> void:
 		if _anime_enhancer != null and is_instance_valid(_anime_enhancer) and _anime_enhancer.has_method("update_enhancer"):
 			var is_drifting: bool = absf(drift_angle_deg) > 12.0
 			_anime_enhancer.call("update_enhancer", _delta, speed, drift_angle_deg, is_drifting, rpm)
+		var active_chassis: Node3D = _spawned_vehicle.get_node_or_null("VisualChassisRoot")
+		if active_chassis != null and active_chassis.has_method("update_telemetry"):
+			var steer_val: float = float(_spawned_vehicle.get("steer_angle")) if "steer_angle" in _spawned_vehicle else 0.0
+			var is_rev: bool = bool(_spawned_vehicle.get("is_reversing")) if "is_reversing" in _spawned_vehicle else (gear == -1)
+			active_chassis.call("update_telemetry", _delta, speed, rpm, throttle, brake, steer_val, is_rev)
 
 	if _speed_val_label != null and _spawned_vehicle != null and is_instance_valid(_spawned_vehicle):
 		var spd_val: float = float(_spawned_vehicle.get("speed_kmh")) if "speed_kmh" in _spawned_vehicle else 0.0

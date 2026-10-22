@@ -169,27 +169,36 @@ func switch_track(track_id: String, target_world: Node3D = null, vehicle: RigidB
 	current_track_id = track_id
 	var track_data: Dictionary = track_registry[track_id]
 
-	# 1. Clear previous procedural track geometry
-	if is_instance_valid(_generated_track_root):
-		_generated_track_root.queue_free()
-		_generated_track_root = null
-
+	# 1. Manage Akina default environment vs external multi-environment
 	if is_instance_valid(_target_world):
-		var old_node: Node = _target_world.get_node_or_null("ProceduralTrackRoot")
-		if is_instance_valid(old_node):
-			old_node.free()
+		var akina_root: Node = _target_world.get_node_or_null("AkinaDefaultTrack")
+		if is_instance_valid(akina_root):
+			akina_root.visible = (track_id == "akina_downhill")
+			for col in akina_root.find_children("*", "CollisionShape3D", true, false):
+				col.disabled = (track_id != "akina_downhill")
 
-		_generated_track_root = Node3D.new()
-		_generated_track_root.name = "ProceduralTrackRoot"
-		_target_world.add_child(_generated_track_root)
+		# Clean up any previously loaded custom multi-environment
+		var old_env: Node = _target_world.get_node_or_null("MultiEnvironmentRoot")
+		if is_instance_valid(old_env):
+			old_env.name = "MultiEnvironmentRoot_Dying"
+			old_env.queue_free()
 
-		# 2. Build spline and 3D road/curb/guardrail meshes
-		var curve: Curve3D = _generate_track_curve(track_id)
-		_build_procedural_road_meshes(_generated_track_root, curve, track_data)
+		var old_proc: Node = _target_world.get_node_or_null("ProceduralTrackRoot")
+		if is_instance_valid(old_proc):
+			old_proc.queue_free()
 
-	# 3. Teleport Vehicle to Starting Grid with Zero Residual Velocity
-	if is_instance_valid(_vehicle):
-		_teleport_vehicle_to_start(_vehicle, _spawn_transform)
+		if track_id != "akina_downhill":
+			# Load rich procedural biome (Irohazaka / Tsukuba Circuit)
+			var env_mgr_script := load("res://TougeMultiEnvironmentManager.gd")
+			if env_mgr_script != null:
+				var env_mgr = env_mgr_script.new()
+				_target_world.add_child(env_mgr)
+				env_mgr.call("load_environment", track_id, _target_world, _vehicle)
+		else:
+			# Returning to Mount Akina downhill
+			if is_instance_valid(_vehicle):
+				var summit_spawn := Transform3D(Basis.IDENTITY, Vector3(0.0, 0.4, 0.0))
+				_teleport_vehicle_to_start(_vehicle, summit_spawn)
 
 	track_switched.emit(track_id, track_data)
 
@@ -467,7 +476,7 @@ func _build_jdm_ui() -> void:
 	# Always-visible subtle HUD shortcut hint
 	_hud_hint_label = Label.new()
 	_hud_hint_label.text = "[M / ESC] TRACK SELECT MENU"
-	_hud_hint_label.position = Vector2(24, 20)
+	_hud_hint_label.position = Vector2(24, 162)
 	_hud_hint_label.add_theme_font_size_override("font_size", 15)
 	_hud_hint_label.add_theme_color_override("font_color", Color(0.75, 0.92, 1.0, 0.85))
 	add_child(_hud_hint_label)

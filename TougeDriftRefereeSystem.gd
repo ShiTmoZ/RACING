@@ -665,8 +665,9 @@ func _update_drift_scoring_engine(dt: float) -> void:
 	if _spinout_lockout_timer > 0.0:
 		return
 
-	# Check Spin-Out condition (Slip Angle > 70 deg while moving)
-	if _slip_angle_deg > SPINOUT_ANGLE_DEG and _speed_kmh > 18.0:
+	# Check Spin-Out condition: ONLY when already in an active drift session and angle exceeds 70°
+	if _is_drifting and _slip_angle_deg > SPINOUT_ANGLE_DEG and _speed_kmh > 24.0:
+		_spinout_lockout_timer = 1.2
 		_trigger_spin_out("SPIN OUT! ANGLE > 70°")
 		return
 

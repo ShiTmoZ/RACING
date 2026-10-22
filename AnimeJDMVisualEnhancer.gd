@@ -461,9 +461,13 @@ func _update_taillight_ribbons(delta: float, should_emit: bool) -> void:
 			if _right_tail_history.size() > 0:
 				_right_tail_history.pop_back()
 
-	_trail_immediate_mesh.clear_surfaces()
 	if _left_tail_history.size() < 2:
+		if is_instance_valid(_trail_mesh_instance):
+			_trail_mesh_instance.visible = false
 		return
+	if is_instance_valid(_trail_mesh_instance):
+		_trail_mesh_instance.visible = true
+	_trail_immediate_mesh.clear_surfaces()
 
 	_trail_immediate_mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLE_STRIP)
 	var count: int = _left_tail_history.size()

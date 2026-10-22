@@ -14,6 +14,18 @@ extends Node3D
 @export var headlight_pop_angle: float = 0.0 # 0.0 = Sleek Fixed/Closed, 1.0 = Popped Up
 @export var enable_audio_synthesis: bool = true
 
+var WheelFL: Node3D
+var WheelFR: Node3D
+var WheelRL: Node3D
+var WheelRR: Node3D
+
+func set_popups_open(open_state: bool) -> void:
+	headlight_pop_angle = 1.0 if open_state else 0.0
+
+func toggle_popups() -> void:
+	headlight_pop_angle = 0.0 if headlight_pop_angle > 0.5 else 1.0
+
+
 # Exact FD3S Proportions (in meters)
 const CAR_LENGTH: float = 4.285
 const CAR_WIDTH: float = 1.760
@@ -864,11 +876,16 @@ func _build_wheels_and_brakes() -> void:
 		var out_sign: float = -1.0 if is_left else 1.0
 
 		# 1. Steering Pivot Node (Caliper stays fixed in rotation X to pivot)
+		var wheel_names_std: Array[String] = ["WheelFL", "WheelFR", "WheelRL", "WheelRR"]
 		var pivot := Node3D.new()
-		pivot.name = "Wheel_Pivot_" + str(idx)
+		pivot.name = wheel_names_std[idx]
 		pivot.position = wheel_coords[idx]
 		add_child(pivot)
 		_wheel_pivots.append(pivot)
+		if idx == 0: WheelFL = pivot
+		elif idx == 1: WheelFR = pivot
+		elif idx == 2: WheelRL = pivot
+		elif idx == 3: WheelRR = pivot
 
 		# Fixed Red Brembo 4-Piston Caliper
 		var caliper_z_offset: float = 0.11 if idx < 2 else -0.11

@@ -54,58 +54,107 @@ func build_livery() -> void:
 		child.queue_free()
 
 	# -------------------------------------------------------------------------
-	# 1. HOOD DECAL (Projects straight down -Y onto the front hood)
+	# 1. HOOD DECAL (Projects deep down -Y onto the front hood)
 	# -------------------------------------------------------------------------
 	var hood_decal := Decal.new()
 	hood_decal.name = "Decal_Hood_Rem"
 	hood_decal.texture_albedo = _cached_hood_tex
-	# Size: X = width across hood, Y = projection depth, Z = length along hood
-	hood_decal.size = Vector3(1.38, 0.55, 1.38)
-	# Position: Centered on X, raised slightly above hood on Y, forward on Z (-Z is forward)
-	hood_decal.position = Vector3(0.0, 0.82, -1.28)
-	# Slight pitch angle to match the sloped AE86 hood profile
-	hood_decal.rotation_degrees = Vector3(-6.0, 0.0, 0.0)
-	hood_decal.upper_fade = 0.15
-	hood_decal.lower_fade = 0.15
-	hood_decal.normal_fade = 0.45 # Prevents bleeding onto vertical front bumper edges
+	# High projection depth (3.2m) guarantees penetration of all hood geometries
+	hood_decal.size = Vector3(1.65, 3.2, 1.75)
+	hood_decal.position = Vector3(0.0, 0.72, -1.22)
+	hood_decal.rotation_degrees = Vector3(-8.0, 0.0, 0.0)
+	hood_decal.upper_fade = 0.05
+	hood_decal.lower_fade = 0.05
+	hood_decal.normal_fade = 0.35
 	hood_decal.albedo_mix = 1.0
 	hood_decal.cull_mask = car_body_cull_mask
 	add_child(hood_decal)
 
 	# -------------------------------------------------------------------------
-	# 2. LEFT SIDE DECAL (Projects inward along +X onto left doors & quarter panel)
+	# 2. LEFT SIDE DECAL (Projects deep into left doors & quarter panel)
 	# -------------------------------------------------------------------------
 	var left_decal := Decal.new()
 	left_decal.name = "Decal_Side_Left_Rem"
 	left_decal.texture_albedo = _cached_side_l_tex
-	# Local Decal space: X = horizontal length (car Z), Y = projection depth (car X), Z = height (car Y)
-	left_decal.size = Vector3(3.15, 0.50, 0.92)
-	left_decal.position = Vector3(-0.78, 0.54, 0.05)
-	# Rotate so local -Y points toward +X (into the left side of the car), and local -Z is UP (+Y)
+	left_decal.size = Vector3(3.5, 2.5, 1.25)
+	left_decal.position = Vector3(-0.78, 0.52, 0.05)
 	left_decal.rotation_degrees = Vector3(90.0, -90.0, 0.0)
-	left_decal.upper_fade = 0.1
-	left_decal.lower_fade = 0.2
-	left_decal.normal_fade = 0.55 # Prevents wrapping onto the roof or underbody
+	left_decal.upper_fade = 0.05
+	left_decal.lower_fade = 0.05
+	left_decal.normal_fade = 0.40
 	left_decal.albedo_mix = 1.0
 	left_decal.cull_mask = car_body_cull_mask
 	add_child(left_decal)
 
 	# -------------------------------------------------------------------------
-	# 3. RIGHT SIDE DECAL (Projects inward along -X onto right doors & quarter panel)
+	# 3. RIGHT SIDE DECAL (Projects deep into right doors & quarter panel)
 	# -------------------------------------------------------------------------
 	var right_decal := Decal.new()
 	right_decal.name = "Decal_Side_Right_Rem"
 	right_decal.texture_albedo = _cached_side_r_tex
-	right_decal.size = Vector3(3.15, 0.50, 0.92)
-	right_decal.position = Vector3(0.78, 0.54, 0.05)
-	# Rotate so local -Y points toward -X (into the right side of the car), and local -Z is UP (+Y)
+	right_decal.size = Vector3(3.5, 2.5, 1.25)
+	right_decal.position = Vector3(0.78, 0.52, 0.05)
 	right_decal.rotation_degrees = Vector3(90.0, 90.0, 0.0)
-	right_decal.upper_fade = 0.1
-	right_decal.lower_fade = 0.2
-	right_decal.normal_fade = 0.55
+	right_decal.upper_fade = 0.05
+	right_decal.lower_fade = 0.05
+	right_decal.normal_fade = 0.40
 	right_decal.albedo_mix = 1.0
 	right_decal.cull_mask = car_body_cull_mask
 	add_child(right_decal)
+
+	# -------------------------------------------------------------------------
+	# 4. DIRECT TEXTURED QUAD MESH PLATES (100% Guaranteed Visibility on all GPUs)
+	# -------------------------------------------------------------------------
+	# Hood Livery Plate
+	var hood_mi := MeshInstance3D.new()
+	hood_mi.name = "Livery_Hood_Rem_Plate"
+	var hood_quad := QuadMesh.new()
+	hood_quad.size = Vector2(1.28, 1.28)
+	hood_mi.mesh = hood_quad
+	hood_mi.position = Vector3(0.0, 0.63, -1.25)
+	hood_mi.rotation_degrees = Vector3(-98.0, 0.0, 0.0)
+	var hood_mat := StandardMaterial3D.new()
+	hood_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	hood_mat.albedo_texture = _cached_hood_tex
+	hood_mat.roughness = 0.28
+	hood_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	hood_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
+	hood_mi.material_override = hood_mat
+	add_child(hood_mi)
+
+	# Left Side Livery Plate
+	var left_mi := MeshInstance3D.new()
+	left_mi.name = "Livery_Side_Left_Rem_Plate"
+	var side_l_quad := QuadMesh.new()
+	side_l_quad.size = Vector2(2.4, 0.85)
+	left_mi.mesh = side_l_quad
+	left_mi.position = Vector3(-0.835, 0.52, 0.02)
+	left_mi.rotation_degrees = Vector3(0.0, -90.0, 0.0)
+	var side_l_mat := StandardMaterial3D.new()
+	side_l_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	side_l_mat.albedo_texture = _cached_side_l_tex
+	side_l_mat.roughness = 0.28
+	side_l_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	side_l_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
+	left_mi.material_override = side_l_mat
+	add_child(left_mi)
+
+	# Right Side Livery Plate
+	var right_mi := MeshInstance3D.new()
+	right_mi.name = "Livery_Side_Right_Rem_Plate"
+	var side_r_quad := QuadMesh.new()
+	side_r_quad.size = Vector2(2.4, 0.85)
+	right_mi.mesh = side_r_quad
+	right_mi.position = Vector3(0.835, 0.52, 0.02)
+	right_mi.rotation_degrees = Vector3(0.0, 90.0, 0.0)
+	var side_r_mat := StandardMaterial3D.new()
+	side_r_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	side_r_mat.albedo_texture = _cached_side_r_tex
+	side_r_mat.roughness = 0.28
+	side_r_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	side_r_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
+	right_mi.material_override = side_r_mat
+	add_child(right_mi)
 
 
 ## Loads `res://textures/itasha_rem.png` and composites it with procedural SVG racing graphics.

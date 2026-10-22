@@ -55,6 +55,7 @@ enum AIState {
 		if is_inside_tree():
 			_apply_rival_preset()
 
+@export var battle_active: bool = false
 @export var rival_driver_title: String = "REDSUNS KEISUKE // MAZDA RX-7 FD3S"
 @export var player_node_path: NodePath
 @export var track_path_node: NodePath
@@ -552,7 +553,7 @@ func _update_spline_and_battle_gap(_delta: float) -> void:
 		rival_is_leading = gap_spline_meters >= 0.0
 
 	# Evaluate Cat & Mouse Battle Rules
-	if battle_mode == BattleMode.TIME_ATTACK_GHOST or battle_concluded:
+	if not battle_active or battle_mode == BattleMode.TIME_ATTACK_GHOST or battle_concluded:
 		is_corner_attack_active = false
 		is_flashing_headlights = false
 		return
@@ -610,6 +611,12 @@ func _conclude_battle(player_won: bool, reason_text: String) -> void:
 			gap_spline_meters,
 			gap_time_seconds
 		]
+		_hud_banner_panel.modulate.a = 1.0
+		var tw := create_tween()
+		if tw != null:
+			tw.tween_interval(3.5)
+			tw.tween_property(_hud_banner_panel, "modulate:a", 0.0, 0.8)
+			tw.tween_callback(func(): if is_instance_valid(_hud_banner_panel): _hud_banner_panel.visible = false)
 
 
 # ==============================================================================

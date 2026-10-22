@@ -10,16 +10,19 @@ signal showroom_toggled(is_open: bool)
 
 enum CarID {
 	AE86_TRUENO = 0,
-	BNR34_GTR = 1
+	BNR34_GTR = 1,
+	FD3S_RX7 = 2
 }
 
 const AE86ModelerScript = preload("res://AE86TruenoModeler.gd")
 const R34ModelerScript = preload("res://R34SkylineModeler.gd")
+const FD3SModelerScript = preload("res://FD3SRx7Modeler.gd")
 
 const LEGACY_VISUAL_NAMES: Array[String] = [
 	"VisualChassisRoot",
 	"R34SkylineModeler",
 	"AE86TruenoModeler",
+	"FD3SRx7Modeler",
 	"ChassisVisuals",
 	"ProceduralModelRoot",
 	"CarMeshRoot"
@@ -63,6 +66,25 @@ const FLEET_DATABASE: Dictionary = {
 		"accent_color": Color(0.15, 0.68, 1.0, 1.0), # Bayside Blue / Cyber Cyan
 		"badge_bg": Color(0.05, 0.16, 0.28, 0.85),
 		"description": "All-wheel-drive touge monster. Relentless mid-corner traction and twin-turbocharged straight-line brutality."
+	},
+	CarID.FD3S_RX7: {
+		"id": CarID.FD3S_RX7,
+		"name": "Mazda RX-7 Type R FD3S (RE-Amemiya)",
+		"short_name": "MAZDA RX-7 FD3S",
+		"jp_badge": "RedSuns 高橋涼介 | FD3S",
+		"drivetrain": "FR ROTARY TURBO",
+		"engine_code": "13B-REW 1.3L Twin-Rotor Sequential Turbo",
+		"hp": 280,
+		"mass": 1260.0,
+		"engine_peak_torque": 314.0,
+		"redline_rpm": 8500.0,
+		"final_drive": 4.100,
+		"reverse_ratio": -3.538,
+		"gear_ratios": [3.483, 2.015, 1.391, 1.000, 0.762],
+		"has_popups": true,
+		"accent_color": Color(0.98, 0.82, 0.12, 1.0), # Competition Yellow / Amber
+		"badge_bg": Color(0.24, 0.18, 0.04, 0.85),
+		"description": "50:50 weight distribution touge scalpel. High-revving sequential twin-turbo rotary scream and RE-Amemiya GT aero."
 	}
 }
 
@@ -152,11 +174,26 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 	
-	# In-Game Live Controls: [H] Popup Headlight Toggle for AE86
+	# In-Game Live Controls: [H] Popup Headlight Toggle
 	if key_event.keycode == KEY_H or key_event.physical_keycode == KEY_H:
-		if current_car_id == CarID.AE86_TRUENO:
+		if current_car_id == CarID.AE86_TRUENO or current_car_id == CarID.FD3S_RX7:
 			_toggle_ae86_popups()
 			get_viewport().set_input_as_handled()
+			return
+
+	# Quick Hot-Swap Vehicle Keys [1], [2], [3]
+	if key_event.keycode == KEY_1 or key_event.physical_keycode == KEY_1:
+		apply_vehicle_to_player(CarID.AE86_TRUENO)
+		get_viewport().set_input_as_handled()
+		return
+	elif key_event.keycode == KEY_2 or key_event.physical_keycode == KEY_2:
+		apply_vehicle_to_player(CarID.BNR34_GTR)
+		get_viewport().set_input_as_handled()
+		return
+	elif key_event.keycode == KEY_3 or key_event.physical_keycode == KEY_3:
+		apply_vehicle_to_player(CarID.FD3S_RX7)
+		get_viewport().set_input_as_handled()
+		return
 
 
 # ==============================================================================
@@ -221,8 +258,8 @@ func apply_vehicle_to_player(car_id: CarID) -> void:
 	# 4. Inject Authentic Physics & Drivetrain Telemetry
 	_inject_vehicle_parameters(target_car, specs)
 	
-	# 5. Configure AE86 Popup Headlights State
-	if car_id == CarID.AE86_TRUENO:
+	# 5. Configure Popup Headlights State
+	if car_id == CarID.AE86_TRUENO or car_id == CarID.FD3S_RX7:
 		popups_open = true
 		_apply_popup_state_to_model(new_model, popups_open)
 
@@ -247,7 +284,7 @@ func _purge_stale_visual_nodes(target_car: Node3D) -> void:
 				is_legacy_named = true
 				break
 		
-		var is_modeler_script := (c_script == AE86ModelerScript or c_script == R34ModelerScript)
+		var is_modeler_script := (c_script == AE86ModelerScript or c_script == R34ModelerScript or c_script == FD3SModelerScript)
 		var has_model_meta := child.has_meta("is_jdm_visual_chassis")
 		
 		# Also catch stray unlabeled Node3Ds that contain WheelFL/WheelFR meshes directly
@@ -271,8 +308,12 @@ func _instantiate_procedural_car(car_id: CarID) -> Node3D:
 	var instance: Node3D = null
 	if car_id == CarID.AE86_TRUENO:
 		instance = AE86ModelerScript.new()
-	else:
+	elif car_id == CarID.BNR34_GTR:
 		instance = R34ModelerScript.new()
+	elif car_id == CarID.FD3S_RX7:
+		instance = FD3SModelerScript.new()
+	else:
+		instance = AE86ModelerScript.new()
 	
 	instance.set_meta("is_jdm_visual_chassis", true)
 	return instance
@@ -411,15 +452,18 @@ func _apply_popup_state_to_model(model: Node3D, open_state: bool) -> void:
 	if not is_instance_valid(model):
 		return
 	
-	# 1. Invoke direct methods on AE86TruenoModeler.gd if implemented
-	if model.has_method("toggle_headlights"):
+	# 1. Invoke direct methods on AE86TruenoModeler.gd / FD3SRx7Modeler.gd if implemented
+	if model.has_method("set_popups_open"):
+		model.call("set_popups_open", open_state)
+		return
+	elif model.has_method("toggle_headlights"):
 		model.call("toggle_headlights", open_state)
+		return
+	elif model.has_method("set_headlights_open"):
+		model.call("set_headlights_open", open_state)
 		return
 	elif model.has_method("toggle_popups"):
 		model.call("toggle_popups")
-		return
-	elif model.has_method("set_popups_open"):
-		model.call("set_popups_open", open_state)
 		return
 	elif model.has_method("set_headlights_open"):
 		model.call("set_headlights_open", open_state)
@@ -526,7 +570,7 @@ func _refresh_showroom_display(car_idx: int) -> void:
 	# Animate Telemetry Bars
 	var pwr_norm: float = clampf(float(specs["hp"]) / 400.0 * 100.0, 10.0, 100.0)
 	var agi_norm: float = clampf((1800.0 - float(specs["mass"])) / 1000.0 * 100.0, 10.0, 100.0)
-	var trc_norm: float = 96.0 if car_id == CarID.BNR34_GTR else 76.0
+	var trc_norm: float = 96.0 if car_id == CarID.BNR34_GTR else (86.0 if car_id == CarID.FD3S_RX7 else 76.0)
 	
 	var bar_tw := create_tween().set_parallel(true)
 	bar_tw.tween_property(_bar_power, "value", pwr_norm, 0.28).set_trans(Tween.TRANS_CUBIC)
@@ -607,7 +651,7 @@ func _build_showroom_interface() -> void:
 	
 	# Car Selection Tabs (AE86 vs BNR34 Only)
 	_tab_buttons.clear()
-	for car_key in [CarID.AE86_TRUENO, CarID.BNR34_GTR]:
+	for car_key in [CarID.AE86_TRUENO, CarID.BNR34_GTR, CarID.FD3S_RX7]:
 		var c_data: Dictionary = FLEET_DATABASE[car_key]
 		var tab_btn := Button.new()
 		tab_btn.text = "  [%d] %s  " % [int(car_key) + 1, c_data["short_name"]]

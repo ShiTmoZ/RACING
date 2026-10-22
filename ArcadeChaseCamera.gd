@@ -54,7 +54,7 @@ func _ready() -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_C:
+		if event.keycode == KEY_V or event.keycode == KEY_C:
 			cycle_camera_mode()
 			get_viewport().set_input_as_handled()
 

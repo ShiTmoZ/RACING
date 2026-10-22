@@ -206,9 +206,9 @@ func _setup_vfd_hud() -> void:
 	
 	_vfd_control = KenwoodVFDDisplay.new(self)
 	_vfd_control.name = "KenwoodVFDControl"
-	_vfd_control.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	_vfd_control.offset_left = -468.0
-	_vfd_control.offset_right = -18.0
+	_vfd_control.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_vfd_control.offset_left = 22.0
+	_vfd_control.offset_right = 472.0
 	_vfd_control.offset_top = 18.0
 	_vfd_control.offset_bottom = 153.0
 	_vfd_control.size = Vector2(450.0, 135.0)
@@ -227,7 +227,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	var code := key_event.keycode if key_event.keycode != KEY_NONE else key_event.physical_keycode
 	
 	match code:
-		KEY_M:
+		KEY_P:
 			toggle_power()
 			get_viewport().set_input_as_handled()
 		
@@ -962,7 +962,7 @@ class KenwoodVFDDisplay extends Control:
 		draw_string(font, Vector2(w - 200, h - 7), "[M] PWR  [T] CH  [-/=] VOL  [R] RESET", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.48, 0.52, 0.56, 0.85))
 		
 		if not radio.is_powered_on:
-			draw_string(font, screen_rect.position + Vector2(95, 50), "STANDBY // PRESS [M]", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, COL_VFD_CYAN_DIM)
+			draw_string(font, screen_rect.position + Vector2(95, 50), "STANDBY // PRESS [P]", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, COL_VFD_CYAN_DIM)
 			return
 		
 		# 4. Top Status Ribbon (Channel Preset, Bitrate, Stereo Indicator, Volume)
