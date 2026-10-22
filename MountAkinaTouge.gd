@@ -82,11 +82,24 @@ func _ready() -> void:
 		call_deferred("_setup_drift_referee_system")
 		call_deferred("_setup_digital_cluster_hud")
 		call_deferred("_setup_atmosphere_and_weather")
+		call_deferred("_setup_track_registry_and_menu")
 
 
 var _referee_mgr: Node = null
 var _digital_cluster: CanvasLayer = null
 var _atmosphere_mgr: Node = null
+
+var _track_registry_menu: CanvasLayer = null
+
+func _setup_track_registry_and_menu() -> void:
+	var menu_script := load("res://TougeTrackRegistryAndMenu.gd")
+	if menu_script != null:
+		_track_registry_menu = menu_script.new() as CanvasLayer
+		if _track_registry_menu != null:
+			_track_registry_menu.name = "TougeTrackRegistryAndMenu"
+			add_child(_track_registry_menu)
+			if _spawned_vehicle != null and _track_registry_menu.has_method("bind_context"):
+				_track_registry_menu.call("bind_context", self, _spawned_vehicle as RigidBody3D)
 
 func _setup_digital_cluster_hud() -> void:
 	var cluster_script := load("res://InitialDDigitalClusterHUD.gd")

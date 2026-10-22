@@ -168,6 +168,8 @@ func _ready() -> void:
 	center_of_mass = Vector3(0.0, -0.35, 0.0)
 	if TougeDriftPhysicsSolverScript != null:
 		drift_solver = TougeDriftPhysicsSolverScript.new()
+		if drift_solver.has_method("initialize_solver"):
+			drift_solver.initialize_solver(self)
 	_resolve_wheel_nodes()
 	_build_wheel_flags()
 	_allocate_wheel_state()
@@ -589,15 +591,22 @@ func _apply_suspension_and_tires(delta: float) -> void:
 				velocity,
 				wheel_forward,
 				wheel_right,
-				throttle_input if not is_reversing else 0.0,
-				brake_input if not is_reversing else throttle_input,
+				throttle_input,
+				brake_input,
 				handbrake_input,
-				inv_delta
+				inv_delta,
+				is_reversing
 			)
 			var contact_arm := point - global_position
 			var lateral_arm := Vector3(contact_arm.x, 0.0, contact_arm.z)
-			apply_force(forces.get("lateral_force", Vector3.ZERO), lateral_arm)
-			apply_force(forces.get("longitudinal_force", Vector3.ZERO), contact_arm)
+			var lat_f = forces.get("lateral_force", Vector3.ZERO)
+			if lat_f is float:
+				lat_f = wheel_right * lat_f
+			var long_f = forces.get("longitudinal_force", Vector3.ZERO)
+			if long_f is float:
+				long_f = wheel_forward * long_f
+			apply_force(lat_f, lateral_arm)
+			apply_force(long_f, contact_arm)
 
 			if i < tire_slip_velocities.size():
 				wheel_is_grounded[i] = true
