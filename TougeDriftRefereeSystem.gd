@@ -1080,10 +1080,10 @@ func _draw_top_center_rank_badge(font: Font, vp_size: Vector2) -> void:
 # TOP-RIGHT SCORE, COMBO & EUROBEAT HUD PANEL
 # ------------------------------------------------------------------------------
 func _draw_top_right_score_panel(font: Font, vp_size: Vector2) -> void:
-	var panel_w: float = 330.0
-	var panel_h: float = 168.0
-	var panel_x: float = vp_size.x - panel_w - 22.0
-	var panel_y: float = 18.0
+	var panel_w: float = 260.0
+	var panel_h: float = 135.0
+	var panel_x: float = vp_size.x - panel_w - 20.0
+	var panel_y: float = 16.0
 
 	# Skewed Arcade Stage panel background
 	var poly := PackedVector2Array([
@@ -1101,8 +1101,8 @@ func _draw_top_right_score_panel(font: Font, vp_size: Vector2) -> void:
 	# 1. Banked Total Score
 	_canvas_drawer.draw_string(font, Vector2(panel_x + 24.0, panel_y + 22.0), "TOTAL DRIFT SCORE", HORIZONTAL_ALIGNMENT_LEFT, 180.0, 12, Color(0.68, 0.76, 0.88))
 	var total_str: String = _format_number(_total_score)
-	_canvas_drawer.draw_string_outline(font, Vector2(panel_x + 20.0, panel_y + 48.0), total_str, HORIZONTAL_ALIGNMENT_RIGHT, panel_w - 36.0, 26, 5, Color.BLACK)
-	_canvas_drawer.draw_string(font, Vector2(panel_x + 20.0, panel_y + 48.0), total_str, HORIZONTAL_ALIGNMENT_RIGHT, panel_w - 36.0, 26, Color(1.0, 0.98, 0.90))
+	_canvas_drawer.draw_string_outline(font, Vector2(panel_x + 20.0, panel_y + 42.0), total_str, HORIZONTAL_ALIGNMENT_RIGHT, panel_w - 28.0, 20, 4, Color.BLACK)
+	_canvas_drawer.draw_string(font, Vector2(panel_x + 20.0, panel_y + 42.0), total_str, HORIZONTAL_ALIGNMENT_RIGHT, panel_w - 28.0, 20, Color(1.0, 0.98, 0.90))
 
 	# 2. Active Drift Points & Combo Multiplier
 	var active_pts_int: int = int(round(_active_drift_points))
@@ -1110,10 +1110,10 @@ func _draw_top_right_score_panel(font: Font, vp_size: Vector2) -> void:
 	if _is_in_sweet_spot:
 		active_col = Color(0.30, 1.0, 0.55)
 
-	_canvas_drawer.draw_string(font, Vector2(panel_x + 24.0, panel_y + 72.0), "ACTIVE DRIFT", HORIZONTAL_ALIGNMENT_LEFT, 140.0, 12, Color(0.68, 0.76, 0.88))
+	_canvas_drawer.draw_string(font, Vector2(panel_x + 24.0, panel_y + 60.0), "ACTIVE DRIFT", HORIZONTAL_ALIGNMENT_LEFT, 120.0, 10, Color(0.68, 0.76, 0.88))
 	var active_str: String = "+%s" % _format_number(active_pts_int)
-	_canvas_drawer.draw_string_outline(font, Vector2(panel_x + 24.0, panel_y + 98.0), active_str, HORIZONTAL_ALIGNMENT_LEFT, 190.0, 24, 5, Color.BLACK)
-	_canvas_drawer.draw_string(font, Vector2(panel_x + 24.0, panel_y + 98.0), active_str, HORIZONTAL_ALIGNMENT_LEFT, 190.0, 24, active_col)
+	_canvas_drawer.draw_string_outline(font, Vector2(panel_x + 24.0, panel_y + 82.0), active_str, HORIZONTAL_ALIGNMENT_LEFT, 140.0, 18, 4, Color.BLACK)
+	_canvas_drawer.draw_string(font, Vector2(panel_x + 24.0, panel_y + 82.0), active_str, HORIZONTAL_ALIGNMENT_LEFT, 140.0, 18, active_col)
 
 	# Combo Multiplier Badge (e.g., "x3.2")
 	var combo_str: String = "x%.1f" % _combo_multiplier
@@ -1122,8 +1122,8 @@ func _draw_top_right_score_panel(font: Font, vp_size: Vector2) -> void:
 		combo_col = Color(1.0, 0.25, 0.38)
 	elif _combo_multiplier >= 2.5:
 		combo_col = Color(1.0, 0.78, 0.15)
-	_canvas_drawer.draw_string_outline(font, Vector2(panel_x + 180.0, panel_y + 98.0), combo_str, HORIZONTAL_ALIGNMENT_RIGHT, panel_w - 196.0, 28, 6, Color.BLACK)
-	_canvas_drawer.draw_string(font, Vector2(panel_x + 180.0, panel_y + 98.0), combo_str, HORIZONTAL_ALIGNMENT_RIGHT, panel_w - 196.0, 28, combo_col)
+	_canvas_drawer.draw_string_outline(font, Vector2(panel_x + 180.0, panel_y + 82.0), combo_str, HORIZONTAL_ALIGNMENT_RIGHT, panel_w - 150.0, 22, 5, Color.BLACK)
+	_canvas_drawer.draw_string(font, Vector2(panel_x + 180.0, panel_y + 82.0), combo_str, HORIZONTAL_ALIGNMENT_RIGHT, panel_w - 150.0, 22, combo_col)
 
 	# 3. Live Telemetry Bar (Angle, Speed, Gutter & Headlights)
 	var tele_str: String = "ANGLE: %02.0f°   SPD: %03.0f KM/H" % [_slip_angle_deg, _speed_kmh]

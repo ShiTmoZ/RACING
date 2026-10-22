@@ -79,8 +79,8 @@ func load_environment(track_id: String, target_scene_root: Node3D, vehicle: Rigi
 	# Compute spawn transform at the start of the track
 	if samples.size() >= 2:
 		var s0: RoadSample = samples[0]
-		var spawn_pos: Vector3 = s0.pos + s0.banked_up * 0.65
-		var look_target: Vector3 = s0.pos + s0.forward * 10.0 + s0.banked_up * 0.65
+		var spawn_pos: Vector3 = s0.pos + s0.banked_up * 1.5
+		var look_target: Vector3 = s0.pos + s0.forward * 10.0 + s0.banked_up * 1.5
 		_spawn_transform = Transform3D(Basis.looking_at(look_target - spawn_pos, s0.banked_up), spawn_pos)
 	else:
 		_spawn_transform = Transform3D(Basis.IDENTITY, Vector3(0.0, 1.0, 0.0))

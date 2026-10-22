@@ -15,7 +15,7 @@ extends CanvasLayer
 ## and UI Toast notifications).
 
 @export_group("Anime Master Toggle")
-@export var effect_enabled: bool = true:
+@export var effect_enabled: bool = false:
 	set(value):
 		effect_enabled = value
 		_update_shader_uniforms()
@@ -461,7 +461,7 @@ func _build_toast_ui() -> void:
 
 func _unhandled_key_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_F2 or event.keycode == KEY_O:
+		if event.keycode == KEY_F2:
 			toggle_anime_mode()
 			get_viewport().set_input_as_handled()
 

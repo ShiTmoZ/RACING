@@ -863,8 +863,13 @@ func _build_dark_glass_ui() -> void:
 	_lobby_panel = PanelContainer.new()
 	_lobby_panel.name = "DarkGlassLobbyPanel"
 	_lobby_panel.add_theme_stylebox_override("panel", glass_style)
-	_lobby_panel.position = Vector2(24.0, 24.0)
 	_lobby_panel.custom_minimum_size = Vector2(340.0, 230.0)
+	_lobby_panel.visible = false
+	_lobby_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_lobby_panel.offset_left = -170.0
+	_lobby_panel.offset_right = 170.0
+	_lobby_panel.offset_top = -115.0
+	_lobby_panel.offset_bottom = 115.0
 	_ui_layer.add_child(_lobby_panel)
 
 	var vbox: VBoxContainer = VBoxContainer.new()

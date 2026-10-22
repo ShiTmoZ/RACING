@@ -111,8 +111,8 @@ func build_livery() -> void:
 	var hood_quad := QuadMesh.new()
 	hood_quad.size = Vector2(1.28, 1.28)
 	hood_mi.mesh = hood_quad
-	hood_mi.position = Vector3(0.0, 0.63, -1.25)
-	hood_mi.rotation_degrees = Vector3(-98.0, 0.0, 0.0)
+	hood_mi.position = Vector3(0.0, 0.74, -1.25)
+	hood_mi.rotation_degrees = Vector3(-82.0, 0.0, 0.0)
 	var hood_mat := StandardMaterial3D.new()
 	hood_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	hood_mat.albedo_texture = _cached_hood_tex
@@ -128,7 +128,7 @@ func build_livery() -> void:
 	var side_l_quad := QuadMesh.new()
 	side_l_quad.size = Vector2(2.4, 0.85)
 	left_mi.mesh = side_l_quad
-	left_mi.position = Vector3(-0.835, 0.52, 0.02)
+	left_mi.position = Vector3(-0.895, 0.52, 0.02)
 	left_mi.rotation_degrees = Vector3(0.0, -90.0, 0.0)
 	var side_l_mat := StandardMaterial3D.new()
 	side_l_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -145,7 +145,7 @@ func build_livery() -> void:
 	var side_r_quad := QuadMesh.new()
 	side_r_quad.size = Vector2(2.4, 0.85)
 	right_mi.mesh = side_r_quad
-	right_mi.position = Vector3(0.835, 0.52, 0.02)
+	right_mi.position = Vector3(0.895, 0.52, 0.02)
 	right_mi.rotation_degrees = Vector3(0.0, 90.0, 0.0)
 	var side_r_mat := StandardMaterial3D.new()
 	side_r_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
