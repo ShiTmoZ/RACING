@@ -129,6 +129,18 @@ func select_and_load_track(track_id: String) -> void:
 	if is_instance_valid(_env_manager) and _env_manager.has_method("load_track_environment"):
 		var spawn_xform: Transform3D = _env_manager.call("load_track_environment", track_id, track_data, _vehicle)
 		_snap_active_cameras_to_vehicle(_vehicle, spawn_xform)
+
+		# Reposition AI rival if present on new track
+		var root := get_tree().current_scene
+		if root:
+			var rival := root.find_child("TougeAIRivalRacer", true, false) as RigidBody3D
+			if is_instance_valid(rival):
+				rival.sleeping = true
+				rival.linear_velocity = Vector3.ZERO
+				rival.angular_velocity = Vector3.ZERO
+				rival.global_transform = spawn_xform.translated_local(Vector3(3.5, 0.0, -12.0))
+				rival.sleeping = false
+				rival.reset_physics_interpolation()
 	else:
 		push_error("TougeTrackRegistryAndMenu: TougeMultiEnvironmentManager not available to build track!")
 
@@ -187,6 +199,27 @@ func _reset_single_camera(cam: Camera3D, vehicle: RigidBody3D, cam_pos: Vector3,
 
 
 func _build_menu_ui() -> void:
+	# Persistent HUD Shortcut Hint
+	var hint_panel := PanelContainer.new()
+	hint_panel.name = "HUDStageHintPanel"
+	hint_panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	hint_panel.offset_left = 24.0
+	hint_panel.offset_top = 22.0
+	var h_style := StyleBoxFlat.new()
+	h_style.bg_color = Color(0.04, 0.05, 0.08, 0.75)
+	h_style.border_color = Color(0.95, 0.65, 0.15, 0.8)
+	h_style.set_border_width_all(1)
+	h_style.set_corner_radius_all(4)
+	h_style.set_content_margin_all(8)
+	hint_panel.add_theme_stylebox_override("panel", h_style)
+	add_child(hint_panel)
+
+	var hint_lbl := Label.new()
+	hint_lbl.text = "[M / TAB] SELECT TRACK  |  [F10] GRAPHICS & FPS  |  [R] RESTART"
+	hint_lbl.add_theme_font_size_override("font_size", 12)
+	hint_lbl.add_theme_color_override("font_color", Color(0.95, 0.85, 0.45, 1.0))
+	hint_panel.add_child(hint_lbl)
+
 	_panel = PanelContainer.new()
 	_panel.name = "TrackSelectorPanel"
 	_panel.set_anchors_preset(Control.PRESET_CENTER)

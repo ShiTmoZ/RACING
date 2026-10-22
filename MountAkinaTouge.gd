@@ -134,8 +134,8 @@ func _setup_ai_rival_racer() -> void:
 		_ai_rival_car = rival_script.new() as RigidBody3D
 		if _ai_rival_car != null:
 			_ai_rival_car.name = "TougeAIRivalRacer"
-			# Offset rival 14 meters ahead or behind along the starting straight
-			_ai_rival_car.transform.origin = Vector3(3.2, 0.4, -14.0)
+			# Offset rival onto starting grid next to player
+			_ai_rival_car.global_transform = _spawn_transform.translated_local(Vector3(3.5, 0.0, -12.0))
 			add_child(_ai_rival_car)
 			if _spawned_vehicle != null and _ai_rival_car.has_method("set_player_target"):
 				_ai_rival_car.call("set_player_target", _spawned_vehicle)

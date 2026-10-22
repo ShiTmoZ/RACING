@@ -57,19 +57,19 @@ var settings: Dictionary = {
 	"taa_enabled": true,
 	"fxaa_enabled": false,
 	"msaa_3d": Viewport.MSAA_DISABLED,
-	"sdfgi_enabled": true,
-	"sdfgi_quality": 1, # 0 = Off, 1 = High (1 Cascade), 2 = Ultra RT (4 Cascades + Skylight/Bounce)
+	"sdfgi_enabled": false,
+	"sdfgi_quality": 0,
 	"ssr_enabled": true,
 	"ssr_quality": 2,   # 0 = Off, 1 = Low (16), 2 = High (64), 3 = Ultra (128 + Roughness)
 	"ssao_enabled": true,
 	"ssao_quality": 2,  # 0 = Very Low, 1 = Low, 2 = Medium/High, 3 = Ultra
-	"ssil_enabled": true,
+	"ssil_enabled": false,
 	"volumetric_fog_enabled": true,
 	"god_rays_temporal": true,
 	"volumetric_fog_density": 0.0035,
 	"shadow_size": 2048,
-	"shadow_filter_quality": 3, # RenderingServer.ShadowQuality
-	"motion_blur_enabled": true,
+	"shadow_filter_quality": RenderingServer.SHADOW_QUALITY_SOFT_MEDIUM,
+	"motion_blur_enabled": false,
 	"motion_blur_intensity": 0.55
 }
 
@@ -200,20 +200,19 @@ func apply_preset(preset: QualityPreset, save_to_disk: bool = true) -> void:
 			settings["taa_enabled"] = true
 			settings["fxaa_enabled"] = false
 			settings["msaa_3d"] = Viewport.MSAA_DISABLED
-			settings["sdfgi_enabled"] = true
-			settings["sdfgi_quality"] = 1 # 1 Cascade, min cell size 0.25
+			settings["sdfgi_enabled"] = false # Off by default for rock-solid 144Hz; toggleable via F10 Ultra
+			settings["sdfgi_quality"] = 0
 			settings["ssr_enabled"] = true
 			settings["ssr_quality"] = 2 # High (64 steps)
 			settings["ssao_enabled"] = true
 			settings["ssao_quality"] = 2 # High
-			settings["ssil_enabled"] = true
+			settings["ssil_enabled"] = false
 			settings["volumetric_fog_enabled"] = true
 			settings["god_rays_temporal"] = true
 			settings["volumetric_fog_density"] = 0.0032
 			settings["shadow_size"] = 2048
 			settings["shadow_filter_quality"] = RenderingServer.SHADOW_QUALITY_SOFT_MEDIUM
-			settings["motion_blur_enabled"] = true
-			settings["motion_blur_intensity"] = 0.45
+			settings["motion_blur_enabled"] = false
 
 		QualityPreset.ULTRA_RAY_TRACING:
 			# Initial D Touge Sunset Glow Profile

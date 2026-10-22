@@ -458,7 +458,15 @@ func _physics_process(delta: float) -> void:
 	if delta <= 0.00001:
 		return
 
-	battle_elapsed_time_s += delta
+	if battle_active and not battle_concluded:
+		battle_elapsed_time_s += delta
+
+	# Freeze if fallen below bounds to prevent CPU broadphase spikes
+	if global_position.y < -50.0:
+		linear_velocity = Vector3.ZERO
+		angular_velocity = Vector3.ZERO
+		sleeping = true
+		return
 
 	# 1. Measure current vehicle kinematics
 	var current_basis: Basis = global_transform.basis
@@ -514,7 +522,7 @@ func _update_spline_and_battle_gap(_delta: float) -> void:
 	rival_spline_offset_m = _track_curve.get_closest_offset(local_car_pos)
 
 	# Check if track loops or finishes
-	if not loop_track_spline and not battle_concluded:
+	if battle_active and not loop_track_spline and not battle_concluded:
 		if rival_spline_offset_m >= _track_total_length - 4.0 and battle_elapsed_time_s > 2.0:
 			_conclude_battle(not rival_is_leading, "FINISH LINE CROSSED")
 			return
@@ -592,7 +600,7 @@ func _update_spline_and_battle_gap(_delta: float) -> void:
 
 
 func _conclude_battle(player_won: bool, reason_text: String) -> void:
-	if battle_concluded:
+	if not battle_active or battle_concluded:
 		return
 	battle_concluded = true
 	current_ai_state = AIState.BATTLE_FINISHED
