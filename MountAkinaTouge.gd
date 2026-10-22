@@ -83,6 +83,8 @@ func _ready() -> void:
 		call_deferred("_setup_digital_cluster_hud")
 		call_deferred("_setup_atmosphere_and_weather")
 		call_deferred("_setup_track_registry_and_menu")
+		call_deferred("_setup_sector_split_and_rank_hud")
+		call_deferred("_setup_ai_rival_racer")
 
 
 var _referee_mgr: Node = null
@@ -90,6 +92,31 @@ var _digital_cluster: CanvasLayer = null
 var _atmosphere_mgr: Node = null
 
 var _track_registry_menu: CanvasLayer = null
+
+var _sector_rank_hud: CanvasLayer = null
+var _ai_rival_car: RigidBody3D = null
+
+func _setup_sector_split_and_rank_hud() -> void:
+	var hud_script := load("res://TougeSectorSplitAndRankHUD.gd")
+	if hud_script != null:
+		_sector_rank_hud = hud_script.new() as CanvasLayer
+		if _sector_rank_hud != null:
+			_sector_rank_hud.name = "TougeSectorSplitAndRankHUD"
+			add_child(_sector_rank_hud)
+			if _spawned_vehicle != null and _sector_rank_hud.has_method("bind_telemetry"):
+				_sector_rank_hud.call("bind_telemetry", _spawned_vehicle, _referee_mgr)
+
+func _setup_ai_rival_racer() -> void:
+	var rival_script := load("res://TougeAIRivalRacer.gd")
+	if rival_script != null:
+		_ai_rival_car = rival_script.new() as RigidBody3D
+		if _ai_rival_car != null:
+			_ai_rival_car.name = "TougeAIRivalRacer"
+			# Offset rival 14 meters ahead or behind along the starting straight
+			_ai_rival_car.transform.origin = Vector3(3.2, 0.4, -14.0)
+			add_child(_ai_rival_car)
+			if _spawned_vehicle != null and _ai_rival_car.has_method("set_player_target"):
+				_ai_rival_car.call("set_player_target", _spawned_vehicle)
 
 func _setup_track_registry_and_menu() -> void:
 	var menu_script := load("res://TougeTrackRegistryAndMenu.gd")
@@ -1352,6 +1379,12 @@ func _spawn_player_vehicle() -> void:
 		_referee_mgr.call("set_target_vehicle", _spawned_vehicle)
 	if _atmosphere_mgr != null and _atmosphere_mgr.has_method("set_target_vehicle"):
 		_atmosphere_mgr.call("set_target_vehicle", _spawned_vehicle)
+	if _track_registry_menu != null and _track_registry_menu.has_method("bind_context"):
+		_track_registry_menu.call("bind_context", self, _spawned_vehicle as RigidBody3D)
+	if _sector_rank_hud != null and _sector_rank_hud.has_method("bind_telemetry"):
+		_sector_rank_hud.call("bind_telemetry", _spawned_vehicle, _referee_mgr)
+	if _ai_rival_car != null and _ai_rival_car.has_method("set_player_target"):
+		_ai_rival_car.call("set_player_target", _spawned_vehicle)
 	
 	# Attach Initial D Anime Car VFX (Taillight ribbons, cel smoke, backfire, sparks)
 	var anime_vfx_script := load("res://InitialDAnimeCarVFX.gd")
