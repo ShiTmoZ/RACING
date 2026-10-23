@@ -169,6 +169,7 @@ var _ripple_amplitude: float = 0.0
 var _droplets: Array[WaterDropletItem] = []
 
 ## 2. Drift Scoring & Combo State
+var _score_panel_alpha: float = 0.0
 var _is_drifting: bool = false
 var _drift_duration: float = 0.0
 var _straight_grace_timer: float = 0.0
@@ -260,6 +261,11 @@ func _physics_process(delta: float) -> void:
 	_cd_gyaaaa = maxf(0.0, _cd_gyaaaa - dt)
 	_cd_gatata = maxf(0.0, _cd_gatata - dt)
 	_cd_kaaah = maxf(0.0, _cd_kaaah - dt)
+
+	# Update score panel fade alpha
+	var target_alpha: float = 1.0 if (_is_drifting or _active_drift_points > 1.0) else (0.22 if _total_score > 0.0 else 0.0)
+	var fade_speed: float = 8.0 if target_alpha > _score_panel_alpha else 2.5
+	_score_panel_alpha = move_toward(_score_panel_alpha, target_alpha, dt * fade_speed)
 
 	# Ensure valid player vehicle reference
 	if _vehicle == null or not is_instance_valid(_vehicle):
@@ -952,11 +958,14 @@ func _on_canvas_draw() -> void:
 	# 2. Draw Top-Center Dynamic Touge Drift Rank Badge
 	_draw_top_center_rank_badge(font, vp_size)
 
-	# 3. Draw Top-Right Initial D Arcade Score, Combo & Active Drift Counter
+	# 3. Draw Top-Center Initial D Arcade Score, Combo & Active Drift Counter (below badge)
 	_draw_top_right_score_panel(font, vp_size)
 
 	# 4. Draw Center-Screen Technique Callouts
 	_draw_center_callouts(font, vp_size)
+
+	# 5. Draw Bottom-Left Legendary Fujiwara Water Cup Widget
+	_draw_bottom_left_water_cup_widget(font, vp_size)
 
 # ------------------------------------------------------------------------------
 # MANGA ONOMATOPOEIA DRAWING
@@ -1077,78 +1086,47 @@ func _draw_top_center_rank_badge(font: Font, vp_size: Vector2) -> void:
 	_canvas_drawer.draw_set_transform_matrix(Transform2D.IDENTITY)
 
 # ------------------------------------------------------------------------------
-# TOP-RIGHT SCORE, COMBO & EUROBEAT HUD PANEL
+# TOP-CENTER SCORE, COMBO & EUROBEAT HUD PANEL (de-overlapped, with alpha fade)
 # ------------------------------------------------------------------------------
 func _draw_top_right_score_panel(font: Font, vp_size: Vector2) -> void:
-	var panel_w: float = 260.0
-	var panel_h: float = 135.0
-	var panel_x: float = vp_size.x - panel_w - 20.0
-	var panel_y: float = 16.0
+	var alpha: float = _score_panel_alpha
+	if alpha <= 0.01:
+		return
 
-	# Skewed Arcade Stage panel background
-	var poly := PackedVector2Array([
-		Vector2(panel_x + 16.0, panel_y),
-		Vector2(panel_x + panel_w, panel_y),
-		Vector2(panel_x + panel_w - 10.0, panel_y + panel_h),
-		Vector2(panel_x, panel_y + panel_h)
-	])
-	_canvas_drawer.draw_polygon(poly, [Color(0.04, 0.05, 0.08, 0.88)])
+	var panel_w: float = 300.0
+	var panel_h: float = 92.0
+	var panel_x: float = vp_size.x * 0.5 - panel_w * 0.5
+	var panel_y: float = 96.0  # 96px below top — sits below badge (Y=18, H=68)
 
-	var border_col: Color = Color(1.0, 0.78, 0.15, 0.95) if _is_drifting else Color(0.25, 0.65, 0.95, 0.80)
-	poly.append(poly[0])
-	_canvas_drawer.draw_polyline(poly, border_col, 2.2)
+	_canvas_drawer.draw_rect(Rect2(panel_x, panel_y, panel_w, panel_h),
+		Color(0.04, 0.06, 0.09, 0.84 * alpha), true)
+	var accent_col: Color = Color(1.0, 0.48, 0.12, 0.95 * alpha) if _is_drifting else Color(0.95, 0.65, 0.15, 0.75 * alpha)
+	_canvas_drawer.draw_rect(Rect2(panel_x, panel_y, panel_w, 3.0), accent_col, true)
+	_canvas_drawer.draw_rect(Rect2(panel_x, panel_y, panel_w, panel_h),
+		Color(0.35, 0.42, 0.52, 0.50 * alpha), false, 1.0)
 
-	# 1. Banked Total Score
-	_canvas_drawer.draw_string(font, Vector2(panel_x + 24.0, panel_y + 22.0), "TOTAL DRIFT SCORE", HORIZONTAL_ALIGNMENT_LEFT, 180.0, 12, Color(0.68, 0.76, 0.88))
+	# Title row
+	_canvas_drawer.draw_string(font, Vector2(panel_x + 14.0, panel_y + 20.0),
+		"TOUGE DRIFT TELEMETRY", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.98, 0.68, 0.20, 0.92 * alpha))
+
+	# Total Score
 	var total_str: String = _format_number(_total_score)
-	_canvas_drawer.draw_string_outline(font, Vector2(panel_x + 20.0, panel_y + 42.0), total_str, HORIZONTAL_ALIGNMENT_RIGHT, panel_w - 28.0, 20, 4, Color.BLACK)
-	_canvas_drawer.draw_string(font, Vector2(panel_x + 20.0, panel_y + 42.0), total_str, HORIZONTAL_ALIGNMENT_RIGHT, panel_w - 28.0, 20, Color(1.0, 0.98, 0.90))
+	_canvas_drawer.draw_string_outline(font, Vector2(panel_x + 14.0, panel_y + 48.0),
+		"%07d PTS" % _total_score, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, 4, Color(0.0, 0.0, 0.0, 0.85 * alpha))
+	_canvas_drawer.draw_string(font, Vector2(panel_x + 14.0, panel_y + 48.0),
+		"%07d PTS" % _total_score, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, Color(0.96, 0.98, 1.0, 1.0 * alpha))
 
-	# 2. Active Drift Points & Combo Multiplier
-	var active_pts_int: int = int(round(_active_drift_points))
-	var active_col: Color = Color(1.0, 0.86, 0.18) if _is_drifting else Color(0.48, 0.54, 0.62)
-	if _is_in_sweet_spot:
-		active_col = Color(0.30, 1.0, 0.55)
-
-	_canvas_drawer.draw_string(font, Vector2(panel_x + 24.0, panel_y + 60.0), "ACTIVE DRIFT", HORIZONTAL_ALIGNMENT_LEFT, 120.0, 10, Color(0.68, 0.76, 0.88))
-	var active_str: String = "+%s" % _format_number(active_pts_int)
-	_canvas_drawer.draw_string_outline(font, Vector2(panel_x + 24.0, panel_y + 82.0), active_str, HORIZONTAL_ALIGNMENT_LEFT, 140.0, 18, 4, Color.BLACK)
-	_canvas_drawer.draw_string(font, Vector2(panel_x + 24.0, panel_y + 82.0), active_str, HORIZONTAL_ALIGNMENT_LEFT, 140.0, 18, active_col)
-
-	# Combo Multiplier Badge (e.g., "x3.2")
-	var combo_str: String = "x%.1f" % _combo_multiplier
-	var combo_col: Color = Color(0.35, 0.88, 1.0)
-	if _combo_multiplier >= 4.0:
-		combo_col = Color(1.0, 0.25, 0.38)
-	elif _combo_multiplier >= 2.5:
-		combo_col = Color(1.0, 0.78, 0.15)
-	_canvas_drawer.draw_string_outline(font, Vector2(panel_x + 180.0, panel_y + 82.0), combo_str, HORIZONTAL_ALIGNMENT_RIGHT, panel_w - 150.0, 22, 5, Color.BLACK)
-	_canvas_drawer.draw_string(font, Vector2(panel_x + 180.0, panel_y + 82.0), combo_str, HORIZONTAL_ALIGNMENT_RIGHT, panel_w - 150.0, 22, combo_col)
-
-	# 3. Live Telemetry Bar (Angle, Speed, Gutter & Headlights)
-	var tele_str: String = "ANGLE: %02.0f°   SPD: %03.0f KM/H" % [_slip_angle_deg, _speed_kmh]
-	_canvas_drawer.draw_string(font, Vector2(panel_x + 24.0, panel_y + 122.0), tele_str, HORIZONTAL_ALIGNMENT_LEFT, panel_w - 40.0, 13, Color(0.85, 0.92, 1.0))
-
-	# 4. Eurobeat Combo Fever Bar
-	var bar_x: float = panel_x + 24.0
-	var bar_y: float = panel_y + 132.0
-	var bar_w: float = panel_w - 48.0
-	var bar_h: float = 10.0
-	_canvas_drawer.draw_rect(Rect2(bar_x, bar_y, bar_w, bar_h), Color(0.12, 0.15, 0.20, 0.95), true)
-	var fill_w: float = bar_w * clampf(_eurobeat_meter / 100.0, 0.0, 1.0)
-	var eb_col: Color = Color(1.0, 0.30, 0.55) if _eurobeat_meter >= 99.5 else Color(0.98, 0.62, 0.12)
-	if fill_w > 0.5:
-		_canvas_drawer.draw_rect(Rect2(bar_x, bar_y, fill_w, bar_h), eb_col, true)
-	_canvas_drawer.draw_rect(Rect2(bar_x, bar_y, bar_w, bar_h), Color(0.55, 0.65, 0.78, 0.8), false, 1.2)
-
-	# Status Pills (Headlights [H], Gutter Hook, Sweet Spot)
-	var hl_text: String = "HEADLIGHTS: OPEN [H]" if _headlights_open else "BLIND ATTACK: OFF [H]"
-	var hl_col: Color = Color(1.0, 0.92, 0.45) if _headlights_open else Color(0.45, 0.78, 1.0)
-	_canvas_drawer.draw_string(font, Vector2(panel_x + 24.0, panel_y + 158.0), hl_text, HORIZONTAL_ALIGNMENT_LEFT, 180.0, 11, hl_col)
-
-	var mode_tag: String = "EUROBEAT FEVER!" if _eurobeat_meter >= 99.5 else ("GUTTER HOOK!" if _is_gutter_hooked else ("SWEET SPOT!" if _is_in_sweet_spot else "TOUGE RUN"))
-	var tag_col: Color = Color(0.35, 1.0, 0.55) if (_is_gutter_hooked or _is_in_sweet_spot) else Color(0.75, 0.80, 0.88)
-	_canvas_drawer.draw_string(font, Vector2(panel_x + 160.0, panel_y + 158.0), mode_tag, HORIZONTAL_ALIGNMENT_RIGHT, panel_w - 178.0, 11, tag_col)
+	# Combo line
+	var combo_text: String
+	var combo_col: Color
+	if _is_drifting or _active_drift_points > 1.0:
+		combo_text = "+%s  [x%.1f]  |  %.0f° SLIP" % [_format_number(int(round(_active_drift_points))), _combo_multiplier, absf(_slip_angle_deg)]
+		combo_col = Color(1.0, 0.78, 0.22, 1.0 * alpha)
+	else:
+		combo_text = "IDLE // CRUISING"
+		combo_col = Color(0.65, 0.72, 0.80, 0.75 * alpha)
+	_canvas_drawer.draw_string(font, Vector2(panel_x + 14.0, panel_y + 74.0),
+		combo_text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, combo_col)
 
 # ------------------------------------------------------------------------------
 # BOTTOM-LEFT LEGENDARY FUJIWARA WATER CUP WIDGET
@@ -1157,8 +1135,36 @@ func _get_cup_widget_center(vp_size: Vector2) -> Vector2:
 	# Positioned in bottom-left above controls guide
 	return Vector2(126.0, vp_size.y - 235.0)
 
-func _draw_bottom_left_water_cup_widget(_font: Font, _vp_size: Vector2) -> void:
-	pass
+func _draw_bottom_left_water_cup_widget(font: Font, vp_size: Vector2) -> void:
+	var origin := Vector2(28.0, vp_size.y - 120.0)
+	var panel_size := Vector2(236.0, 94.0)
+	var rect := Rect2(origin, panel_size)
+
+	# Subtle Smoked Glass Styling
+	_canvas_drawer.draw_rect(rect, Color(0.04, 0.07, 0.11, 0.78), true)
+	_canvas_drawer.draw_rect(Rect2(origin, Vector2(3.0, panel_size.y)), Color(0.32, 0.82, 1.0, 0.90), true)
+	_canvas_drawer.draw_rect(rect, Color(0.28, 0.52, 0.68, 0.48), false, 1.0)
+
+	# Cup Geometry (Left side of widget)
+	var cup_center := origin + Vector2(40.0, 50.0)
+	var cup_rect := Rect2(cup_center - Vector2(18.0, 26.0), Vector2(36.0, 52.0))
+	_canvas_drawer.draw_rect(cup_rect, Color(0.08, 0.12, 0.18, 0.90), true)
+	_canvas_drawer.draw_rect(cup_rect, Color(0.75, 0.88, 0.98, 0.75), false, 1.5)
+
+	var water_ratio: float = clampf(_water_level / 100.0, 0.0, 1.0)
+	var fill_h: float = 46.0 * water_ratio
+	var water_rect := Rect2(
+		Vector2(cup_rect.position.x + 3.0, cup_rect.end.y - 3.0 - fill_h),
+		Vector2(cup_rect.size.x - 6.0, fill_h)
+	)
+	var water_col: Color = Color(0.22, 0.78, 1.0, 0.82) if water_ratio > 0.35 else Color(1.0, 0.38, 0.32, 0.88)
+	_canvas_drawer.draw_rect(water_rect, water_col, true)
+
+	# Telemetry Labels (Right side of widget)
+	_canvas_drawer.draw_string(font, origin + Vector2(74.0, 24.0), "FUJIWARA WATER CUP", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.62, 0.88, 1.0, 0.95))
+	_canvas_drawer.draw_string(font, origin + Vector2(74.0, 48.0), "INTEGRITY: %03d%%" % int(round(_water_level)), HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0.95, 0.98, 1.0, 0.98))
+	_canvas_drawer.draw_string(font, origin + Vector2(74.0, 68.0), "LATERAL G: %.2f G" % absf(_g_lat), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.75, 0.82, 0.90, 0.88))
+	_canvas_drawer.draw_string(font, origin + Vector2(74.0, 84.0), "[F1] CONTROLS MANUAL", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.98, 0.68, 0.20, 0.85))
 
 # ------------------------------------------------------------------------------
 # CENTER-SCREEN TECHNIQUE CALLOUTS

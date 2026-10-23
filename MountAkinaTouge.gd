@@ -91,9 +91,11 @@ func _ready() -> void:
 		call_deferred("_setup_drift_referee_system")
 		call_deferred("_setup_digital_cluster_hud")
 		call_deferred("_setup_atmosphere_and_weather")
+		call_deferred("_setup_multi_environment_manager")
 		call_deferred("_setup_track_registry_and_menu")
 		call_deferred("_setup_sector_split_and_rank_hud")
-		call_deferred("_setup_ai_rival_racer")
+		# AI rival purged permanently for pure solo Touge & Free Roam
+		# call_deferred("_setup_ai_rival_racer")
 		call_deferred("_setup_anime_jdm_visual_enhancer")
 
 
@@ -101,11 +103,31 @@ var _referee_mgr: Node = null
 var _digital_cluster: CanvasLayer = null
 var _atmosphere_mgr: Node = null
 
+var _multi_env_manager: Node3D = null
 var _track_registry_menu: CanvasLayer = null
 
 var _sector_rank_hud: CanvasLayer = null
 var _ai_rival_car: RigidBody3D = null
 var _anime_enhancer: Node3D = null
+
+var _world_env_node: WorldEnvironment = null
+var _sun_light_node: DirectionalLight3D = null
+var _rim_light_node: DirectionalLight3D = null
+var _valley_fog_node: FogVolume = null
+
+var _guide_panel_ref: PanelContainer = null
+var _guide_timer: float = 0.0
+var _guide_auto_dismissed: bool = false
+
+func _setup_multi_environment_manager() -> void:
+	if not ResourceLoader.exists("res://TougeMultiEnvironmentManager.gd"):
+		return
+	var mgr_script := load("res://TougeMultiEnvironmentManager.gd") as Script
+	if mgr_script != null:
+		_multi_env_manager = mgr_script.new() as Node3D
+		if _multi_env_manager != null:
+			_multi_env_manager.name = "TougeMultiEnvironmentManager"
+			add_child(_multi_env_manager)
 
 func _setup_anime_jdm_visual_enhancer() -> void:
 	var enh_script := load("res://AnimeJDMVisualEnhancer.gd")
@@ -129,16 +151,9 @@ func _setup_sector_split_and_rank_hud() -> void:
 				_sector_rank_hud.call("bind_telemetry", _spawned_vehicle, _referee_mgr)
 
 func _setup_ai_rival_racer() -> void:
-	var rival_script := load("res://TougeAIRivalRacer.gd")
-	if rival_script != null:
-		_ai_rival_car = rival_script.new() as RigidBody3D
-		if _ai_rival_car != null:
-			_ai_rival_car.name = "TougeAIRivalRacer"
-			# Offset rival onto starting grid next to player
-			_ai_rival_car.global_transform = _spawn_transform.translated_local(Vector3(3.5, 0.0, -12.0))
-			add_child(_ai_rival_car)
-			if _spawned_vehicle != null and _ai_rival_car.has_method("set_player_target"):
-				_ai_rival_car.call("set_player_target", _spawned_vehicle)
+	# Purged permanently for pure solo Touge & Free Roam
+	_ai_rival_car = null
+	return
 
 func _setup_track_registry_and_menu() -> void:
 	var menu_script := load("res://TougeTrackRegistryAndMenu.gd")
@@ -147,7 +162,12 @@ func _setup_track_registry_and_menu() -> void:
 		if _track_registry_menu != null:
 			_track_registry_menu.name = "TougeTrackRegistryAndMenu"
 			add_child(_track_registry_menu)
-			if _spawned_vehicle != null and _track_registry_menu.has_method("bind_context"):
+			var cam: Camera3D = get_viewport().get_camera_3d() if get_viewport() else null
+			if not is_instance_valid(cam):
+				cam = find_child("ArcadeChaseCamera", true, false) as Camera3D
+			if _track_registry_menu.has_method("setup_references"):
+				_track_registry_menu.call("setup_references", _multi_env_manager, _spawned_vehicle, cam)
+			elif _spawned_vehicle != null and _track_registry_menu.has_method("bind_context"):
 				_track_registry_menu.call("bind_context", self, _spawned_vehicle as RigidBody3D)
 
 func _setup_digital_cluster_hud() -> void:
@@ -448,11 +468,13 @@ func _setup_atmosphere_and_lighting() -> void:
 	env.volumetric_fog_ambient_inject = 0.35
 	
 	world_env.environment = env
-	_get_env_root().add_child(world_env)
+	world_env.name = "PersistentWorldEnvironment"
+	add_child(world_env)
+	_world_env_node = world_env
 	
 	# Low-Horizon Golden Hour Sun DirectionalLight3D
 	var sun := DirectionalLight3D.new()
-	sun.name = "DuskHorizonSun"
+	sun.name = "PersistentSunLight"
 	sun.light_color = Color(1.0, 0.48, 0.22)
 	sun.light_energy = 2.4
 	sun.light_volumetric_fog_energy = 2.8
@@ -462,21 +484,23 @@ func _setup_atmosphere_and_lighting() -> void:
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	sun.directional_shadow_max_distance = 350.0
 	sun.rotation_degrees = Vector3(-9.5, -135.0, 0.0) # Low on the horizon
-	_get_env_root().add_child(sun)
+	add_child(sun)
+	_sun_light_node = sun
 	
 	# Deep Purple/Blue Rim Counter-Light (Moon/Twilight Sky Bounce)
 	var rim_light := DirectionalLight3D.new()
-	rim_light.name = "TwilightPurpleRimLight"
+	rim_light.name = "PersistentRimLight"
 	rim_light.light_color = Color(0.38, 0.25, 0.85)
 	rim_light.light_energy = 0.65
 	rim_light.light_volumetric_fog_energy = 0.8
 	rim_light.shadow_enabled = false
 	rim_light.rotation_degrees = Vector3(-38.0, 45.0, 0.0)
-	_get_env_root().add_child(rim_light)
+	add_child(rim_light)
+	_rim_light_node = rim_light
 	
 	# Dense Valley FogVolume at the base of the mountain ravines
 	var valley_fog := FogVolume.new()
-	valley_fog.name = "RavineHeightFogVolume"
+	valley_fog.name = "PersistentValleyFog"
 	valley_fog.size = Vector3(2400.0, 110.0, 2400.0)
 	valley_fog.position = Vector3(0.0, 35.0, 0.0)
 	var fog_mat := FogMaterial.new()
@@ -486,7 +510,8 @@ func _setup_atmosphere_and_lighting() -> void:
 	fog_mat.height_falloff = 0.085
 	fog_mat.edge_fade = 0.25
 	valley_fog.material = fog_mat
-	_get_env_root().add_child(valley_fog)
+	add_child(valley_fog)
+	_valley_fog_node = valley_fog
 
 
 # ==============================================================================
@@ -1547,6 +1572,7 @@ func _setup_desktop_ui() -> void:
 	# 2. Bottom-Left Controls Guide Overlay
 	var guide_panel := PanelContainer.new()
 	guide_panel.name = "ControlsGuidePanel"
+	_guide_panel_ref = guide_panel
 	guide_panel.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	guide_panel.offset_left = 24
 	guide_panel.offset_top = -140
@@ -1568,7 +1594,7 @@ func _setup_desktop_ui() -> void:
 	guide_panel.add_child(guide_vbox)
 
 	var guide_title := Label.new()
-	guide_title.text = "JDM CONTROLS MANUAL"
+	guide_title.text = "JDM CONTROLS MANUAL  [F1: Toggle]"
 	guide_title.add_theme_color_override("font_color", Color(0.2, 0.7, 1.0))
 	guide_title.add_theme_font_size_override("font_size", 12)
 	guide_vbox.add_child(guide_title)
@@ -1713,12 +1739,31 @@ func _process(_delta: float) -> void:
 		var spd_val: float = float(_spawned_vehicle.get("speed_kmh")) if "speed_kmh" in _spawned_vehicle else 0.0
 		_speed_val_label.text = str(int(round(spd_val)))
 
+	# Auto-fade controls guide after 5.0s or when driving > 15 km/h
+	if is_instance_valid(_guide_panel_ref) and _guide_panel_ref.visible and not _guide_auto_dismissed:
+		_guide_timer += _delta
+		var cur_spd: float = float(_spawned_vehicle.get("speed_kmh")) if (_spawned_vehicle and "speed_kmh" in _spawned_vehicle) else 0.0
+		if _guide_timer > 5.0 or cur_spd > 15.0:
+			_guide_auto_dismissed = true
+			var tween := create_tween()
+			tween.tween_property(_guide_panel_ref, "modulate:a", 0.0, 0.6)
+			tween.tween_callback(func():
+				if is_instance_valid(_guide_panel_ref):
+					_guide_panel_ref.visible = false
+			)
+
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		var key_event := event as InputEventKey
 		if key_event.physical_keycode == KEY_F11:
 			_toggle_fullscreen()
+		elif key_event.physical_keycode == KEY_F1:
+			if is_instance_valid(_guide_panel_ref):
+				_guide_panel_ref.visible = not _guide_panel_ref.visible
+				if _guide_panel_ref.visible:
+					_guide_panel_ref.modulate.a = 1.0
+					_guide_auto_dismissed = true
 		elif key_event.physical_keycode == KEY_ESCAPE:
 			_toggle_pause()
 

@@ -727,9 +727,11 @@ func _on_hud_canvas_draw() -> void:
 	if vp_size.x < 10.0 or vp_size.y < 10.0:
 		vp_size = Vector2(1280.0, 720.0)
 
-	_draw_sector_split_panel(font, Vector2(24.0, 22.0))
-	_draw_drift_rank_panel(font, Vector2(vp_size.x - 364.0, 22.0))
-	_draw_speed_trap_cluster(font, Vector2(vp_size.x - 320.0, vp_size.y - 128.0))
+	_draw_sector_split_panel(font, Vector2(24.0, 68.0))
+	# Drift rank panel removed from top right to prevent overlap with window controls and referee
+	# _draw_drift_rank_panel(font, Vector2(vp_size.x - 364.0, 22.0))
+	if _trap_banner_timer > 0.0:
+		_draw_speed_trap_cluster(font, Vector2(vp_size.x * 0.5 + 174.0, 24.0))
 	_draw_center_flash_banners(font, vp_size)
 
 
